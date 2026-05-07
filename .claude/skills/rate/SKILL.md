@@ -1,0 +1,257 @@
+---
+name: rate
+description: |
+  Probabilistic / sampled quality rating of the current codebase, project, or app. Spawns N parallel rater subagents (default 16) that each sample one random aspect (a function, struct, pattern, doc section, project META, etc.) and score it 0.00-1.00 with a thesis. Each rater report is then adversarially challenged by K more subagents (default 2) that produce their own adjusted reports. Finally synthesizes one overall project rating.
+
+  Optional args: `/rate` uses defaults; `/rate N` overrides rater count (e.g. `/rate 8`); `/rate N K` overrides both rater count and adversaries-per-rater (e.g. `/rate 32 4`). Add the literal token `improve` anywhere in the args (e.g. `/rate improve`, `/rate 8 improve`, `/rate 32 4 improve`) to also have every subagent report actionable improvement suggestions for whatever they flagged, and to receive a synthesized "Actionable improvements" section in the final report.
+
+  TRIGGER on /rate, AND on any natural-language request that asks for an overall judgment of project / codebase / repo quality without specifying a method. Examples that MUST trigger this skill:
+    - "how good is my codebase / project / repo / code?"
+    - "what do you think of this project / codebase?"
+    - "rate my project / code / repo"
+    - "give me a quality score / rating / grade for this codebase"
+    - "is this codebase any good?"
+    - "review the whole project" (when no specific file/PR is named)
+    - "what's your opinion of this codebase?"
+    - "how would you score this repo?"
+    - any "how good", "how bad", "rate", "score", "grade", "judge", "opinion", "thoughts on" phrasing aimed at the codebase as a whole
+
+  DO NOT trigger when: the user names a specific file/function/PR to review (use normal review flow), asks a focused code question, asks about a single bug, or invokes /review or /security-review explicitly.
+
+  When inferring, just call the skill — do not ask the user to confirm. The skill itself is the answer to "how good is it?"
+---
+
+# /rate — Probabilistic Project Rating
+
+Random-sample quality assessment. The point is **not** completeness. You are deliberately rating a scattered handful of aspects to "get a taste" of the project, then letting adversaries challenge each rating before synthesis. Variance and surprise are features, not bugs.
+
+## Arguments
+
+The skill accepts up to two optional positional numeric arguments (N, K) plus one optional flag token (`improve`):
+
+- `/rate` → defaults: **N = 16** raters, **K = 2** adversaries per rater, improve mode **off**
+- `/rate N` → **N** raters, still **K = 2** adversaries per rater (e.g. `/rate 8` → 8 raters with 2 adversaries each → 24 total ratings: 8 originals + 16 adversaries)
+- `/rate N K` → **N** raters, **K** adversaries each (e.g. `/rate 32 4` → 32 raters with 4 adversaries each → 160 total ratings: 32 originals + 128 adversaries)
+- `/rate improve` → defaults + **improve mode on** (subagents suggest fixes, final report includes "Actionable improvements")
+- `/rate N improve` or `/rate N K improve` → same N/K override as above, plus improve mode on
+
+Parsing rules:
+
+1. Split the argument string on whitespace.
+2. If any token equals `improve` (case-insensitive), set **improve mode = on** and remove every such token (multiple `improve` tokens collapse to one flag).
+3. Parse the remaining tokens positionally as N then K. A token is treated as an integer if it parses as a number AND its fractional part is exactly zero (so `8`, `8.0`, `08` all parse as 8; `8.5` does not). Tokens that are missing, non-numeric, or not integer-valued (e.g. `8.5`, `foo`) use the default; tokens beyond the second are ignored. Then clamp N ≥ 1 and K ≥ 0 (so `0` and negatives parse as valid integers and get clamped afterwards — and K = 0 is legal, meaning no adversarial pass, just raw rater ratings).
+
+Very large N or K is allowed, but each rater plus its K adversaries are dispatched as background subagents through the harness. If N or K is large enough that a single message exceeds tool-call limits, fall back to dispatching in successive same-message batches (still all background): for raters, batch the initial spawn; for adversaries, when K parallel calls per rater would exceed limits, split that rater's K adversaries into back-to-back same-message batches as well. Never serialize a rater behind another rater (or an adversary behind a co-tuple adversary) just to reduce concurrency — the sample is meant to be parallel.
+
+The `improve` token may appear before, between, or after the numeric args — `/rate improve 8`, `/rate 8 improve`, and `/rate 8 2 improve` are all equivalent to N=8, K=2, improve=on.
+
+## Flow at a glance
+
+1. Spawn **N rater subagents** in parallel (background). Each picks one random target and reports a rating + thesis.
+2. As each rater report arrives, immediately spawn **K adversarial subagents** in parallel (background) that independently produce adjusted versions of that report. (If K = 0, skip this step.)
+3. When every dispatched subagent has either returned or been resolved (any rater whose report was unparseable is dropped immediately along with its tuple, and adversaries are only dispatched for parseable raters), write one **final synthesis report** with an overall rating. In the all-parseable case this is N originals + N·K adversaries = **N·(K+1) total ratings, in N tuples of size K+1**.
+
+Do not wait for all raters before launching adversaries. Eager spawning is a hard requirement whenever K ≥ 1 (when K = 0 there are no adversaries, so this rule is vacuous).
+
+---
+
+## Step 1 — Launch N raters in parallel
+
+In a single message, call the Agent tool **N times** with `subagent_type: general-purpose` and `run_in_background: true`. Give each rater a different **category hint** so the sample spreads across the project. The suggested pool below has 16 entries (the wildcard is one of them). Sampling rule: if N ≤ 16, randomly sample N distinct entries from the pool — the wildcard may or may not be drawn. If N > 16, use each of the 16 entries exactly once for the first 16 raters in a **freshly shuffled random order** (so two consecutive runs don't assign the same category to rater #1), then assign the **wildcard** to every additional rater beyond the 16th (e.g., N = 20 ends up with all 16 specific hints used once each in shuffled order plus 4 extra raters on the wildcard).
+
+- a specific function or method
+- a specific struct / class / type / enum
+- a specific module or single source file
+- a recurring pattern (error handling, logging, validation, retries, ID generation, etc.)
+- a style/formatting choice (naming, comments, line length, import ordering)
+- a structural decision (folder layout, module boundaries, dependency graph)
+- an architectural approach (concurrency model, state management, data flow)
+- a section of a doc file (README, CLAUDE.md, design doc, ADR)
+- project META: `.gitignore`, CI config, Dockerfile, build scripts, release process
+- dependency choices (what's pulled in, version pinning, alternatives ignored)
+- test coverage or quality for some specific area
+- API/CLI surface ergonomics
+- handling of a specific edge case or failure mode
+- security posture of one specific surface
+- performance characteristics of one specific path
+- a wildcard the rater finds interesting
+
+**Prompt template for each rater** (customize the category hint and SEED per agent — every subagent across the entire run, raters and adversaries alike, must receive a *unique* SEED of 8 freshly-generated random English words; do not reuse seeds across subagents and do not explain the field to them):
+
+> SEED: `<EIGHT RANDOM WORDS, SPACE-SEPARATED>`
+>
+> You are a rater in a probabilistic project review. The repo is at the working directory.
+>
+> **Your category:** `<CATEGORY HINT>`. Find ONE concrete target in this category by exploring the repo. Pick something specific — not "the codebase" but e.g. "the `reconcile_index` function in src/store/index.rs", or "the error type hierarchy in src/error.rs", or "the section of README.md describing the storage layout".
+>
+> Read the actual code/file. Form an opinion. Then return EXACTLY this format and nothing else:
+>
+> ```
+> TARGET: <one-line description of what you rated, with file path>
+> RATING: <float between 0.00 and 1.00, two decimals>
+> THESIS: <2-4 sentences. Concrete observations. Why this rating, not 0.1 higher or lower. Cite specific lines or behavior.>
+> ```
+>
+> Calibration (be honest, not diplomatic):
+> - 0.90+ — excellent, would point to as exemplary
+> - 0.75 — solidly good, minor nits
+> - 0.60 — acceptable, clear room for improvement
+> - 0.45 — mediocre, noticeable problems
+> - 0.30 — bad, real issues a maintainer should care about
+> - 0.15 or below — broken, harmful, or absent where it shouldn't be
+>
+> Avoid clustering near 0.7. Spread your ratings honestly.
+
+**If improve mode is on,** append the following block to the rater prompt above. It overrides the base prompt's "nothing else" constraint: the full expected output now has four fields, in order — TARGET, RATING, THESIS, IMPROVEMENTS.
+
+> Add an IMPROVEMENTS block immediately after THESIS (this extends, not replaces, the earlier format):
+>
+> ```
+> IMPROVEMENTS:
+> - <specific, actionable fix — file:line + concrete change>
+> - <another fix, if applicable>
+> ```
+>
+> List 1–5 concrete, actionable improvements total, covering the issues you surfaced in your thesis (one bullet per distinct fix, not one bullet per issue). Each bullet should name the file (and line/range when useful) and state the exact change (rename, delete, split, add a test, replace X with Y, etc.) — not "consider improving error handling" but "replace `c.is_alphanumeric()` at validation.rs:24 with `c.is_ascii_alphanumeric()` so Cyrillic lookalikes are rejected at parse time". If the target is already strong and you genuinely found nothing actionable, write `IMPROVEMENTS: none` and nothing else in that block.
+
+## Step 2 — Spawn adversaries eagerly as each rater returns
+
+Skip this step entirely if K = 0 — go directly to Step 3 and treat each rater's rating as its final rating.
+
+You will receive a notification each time a background rater finishes. The instant a rater's report arrives:
+
+- **First, parse it.** Locate the rater's `TARGET:` / `RATING:` / `THESIS:` lines using the lenient-parsing rule (see "Subagent failures and lenient parsing" in the Hard rules). If the report is unparseable (no extractable TARGET/RATING/THESIS, or RATING is non-numeric / out of [0.00, 1.00]), **do NOT spawn adversaries for it** — the tuple is dropped immediately and contributes nothing to the math or to the improvements list. Note the drop and move on.
+- If parseable, in your **next turn** send a single message with **K Agent calls** (parallel, all `run_in_background: true`) for that report.
+- If multiple rater notifications arrive together in the same input, parse each one and fire adversary calls for the parseable ones in that same message (K parallel calls per surviving rater) — co-occurrence is not deferral.
+- Never wait for additional raters before spawning adversaries for a rater that has already returned and parsed cleanly.
+
+Each adversary gets the same prompt independently (each adversary also receives its own freshly-generated unique SEED of 8 random English words — distinct from every other rater and adversary in the run, no explanation given to the subagent):
+
+> SEED: `<EIGHT RANDOM WORDS, SPACE-SEPARATED>`
+>
+> You are an adversarial reviewer in a probabilistic project rating. Another rater produced this report:
+>
+> ```
+> <PASTE ORIGINAL REPORT VERBATIM>
+> ```
+>
+> Your job: **poke holes**. Read the same target yourself. Argue the rating is too high OR too low. Look for:
+> - context the original rater missed (callers, tests, history, related files)
+> - bias in their framing (gave benefit of the doubt? was overly harsh?)
+> - hidden virtues or hidden problems they didn't surface
+> - whether their thesis actually supports the number they assigned
+>
+> Then produce YOUR OWN adjusted report in EXACTLY the same format:
+>
+> ```
+> TARGET: <same artifact as the original — you may correct an obvious typo, file path, or one-line description, but you must rate the same underlying file/function/section the original named. Do NOT swap to a different artifact even if you'd rather rate something else nearby.>
+> RATING: <your adjusted float, 0.00-1.00, two decimals>
+> THESIS: <2-4 sentences. What you found that the original missed or got wrong, OR — if you kept the rating — why it survives scrutiny. Either way: why your number is the right number, citing concrete evidence from your own re-read.>
+> ```
+>
+> Calibration (use the same scale the original rater was given — be honest, not diplomatic):
+> - 0.90+ — excellent, would point to as exemplary
+> - 0.75 — solidly good, minor nits
+> - 0.60 — acceptable, clear room for improvement
+> - 0.45 — mediocre, noticeable problems
+> - 0.30 — bad, real issues a maintainer should care about
+> - 0.15 or below — broken, harmful, or absent where it shouldn't be
+>
+> Avoid clustering near 0.7 or anchoring on the original's number. Place your rating where the evidence honestly puts it.
+>
+> The rating may move up, down, or stay. Stay only if after genuine adversarial scrutiny you still agree — no rubber-stamping.
+>
+> **If you genuinely cannot locate the artifact** the original named (it appears to have been renamed, deleted, or hallucinated, and no obvious correction recovers it), say so in your THESIS and write `RATING: n/a` instead of a number. This is the only acceptable non-numeric value — use it sparingly, only when you have actually searched and failed to find the artifact, not as a hedge.
+
+**If improve mode is on,** append the same IMPROVEMENTS extension to the adversary prompt. The adversary's full expected output now has four fields, in order — TARGET, RATING, THESIS, IMPROVEMENTS.
+
+> Add an IMPROVEMENTS block immediately after THESIS (this extends, not replaces, the earlier format):
+>
+> ```
+> IMPROVEMENTS:
+> - <specific, actionable fix — file:line + concrete change>
+> - <another fix, if applicable>
+> ```
+>
+> List 1–5 fixes *you* would recommend based on your own re-read — they may overlap with the original rater's list (that's useful signal), contradict it, or add fixes the original missed. Each bullet must name the file (and line/range when useful) and state the exact change, not a vague aspiration. If after adversarial scrutiny you genuinely think the target needs no improvements, write `IMPROVEMENTS: none`.
+
+Adversaries run independently; when K ≥ 2 they may disagree with each other, which is fine.
+
+## Step 3 — Final synthesis
+
+Once every dispatched subagent has either returned (rater + its K adversaries, where applicable) or had its tuple dropped for parse failure, write the final report directly to the user (no file). Include:
+
+### Per-target table
+
+A table with one row per **surviving** original target (any tuple dropped for parse failure or hallucinated-target does not appear in the table — it is summarized in the `_Excluded:_` line(s) below the table instead). Each row has a `#` index, a `Target` label (one-line description plus file path), the `Original` rating, one rating column per adversary (Adv A through Adv {Kth letter} for K ≤ 26; for K > 26, switch to numeric labels Adv 1 through Adv K — exactly K columns when K ≥ 1, none when K = 0), and a `Tuple mean` column. Empty cells (e.g., a single dropped adversary) are rendered as `—`. When K = 0, there are no adversary columns and the tuple mean equals the original rating.
+
+The example header below is illustrative for K = 2; for other K values render exactly K adversary columns (no literal `…`).
+
+| # | Target | Original | Adv A | Adv B | Tuple mean |
+|---|--------|----------|-------|-------|------------|
+
+Below the table, render one `_Excluded: <count> — <reason>_` line per distinct exclusion reason that occurred (e.g., one line for parse-failure drops, a separate line for hallucinated-target drops). Omit these lines entirely when no exclusions occurred.
+
+### Notable disagreements
+
+The 3-5 most interesting cases where an adversary moved the rating significantly (|adversary − original| ≥ 0.15) or — when K ≥ 2 — where the spread across the tuple's surviving ratings was wide (max − min ≥ 0.15 across all surviving ratings in the tuple, i.e. original plus every surviving adversary). One line each, explaining what the disagreement was about.
+
+Ranking when more than 5 tuples qualify: rank by **disagreement magnitude** = max(|adv − original|) across surviving adversaries in the tuple, then — when K ≥ 2 — take the larger of that and (max − min) across all surviving ratings in the tuple (original plus every surviving adversary, the same metric used in the threshold above). Show the top 5 by that magnitude, ties broken by lower tuple index (#) first. If only 1, 2, 3, or 4 tuples meet the threshold, show exactly those (don't pad). Render "_No notable disagreements in this sample._" only when **zero** tuples meet either threshold. Omit the section entirely when K = 0.
+
+### Final overall rating
+
+Compute as the **mean of the surviving tuple means** — one mean per tuple that has at least one parseable rating left after exclusions, so each surviving target weighs equally regardless of how many adversaries pile on. Round to 2 decimals.
+
+If **zero tuples survive** (every rater produced unparseable output, which should be very rare), the entire Step 3 output is the fallback line below — skip every other section (per-target table, notable disagreements, synthesis, and, in improve mode, actionable improvements) and emit only:
+
+> _All N raters produced unparseable output — no rating computed. Re-run /rate to try again._
+
+Otherwise:
+
+> **PROBABILISTIC RATING: X.XX / 1.00**
+
+When the surviving tuple count M is less than N, append a one-line note immediately under the rating: `_Computed from M of N tuples; N − M excluded (see table for reasons)._`
+
+### Synthesis (3-6 sentences)
+
+What this random sample suggests about the project: where it's strong, where it's weak, what kinds of issues showed up repeatedly, and the standing caveat: *this is a random sample, not a complete review — re-run /rate for a different sample.*
+
+### Actionable improvements
+
+Include this section **only when improve mode is on**; otherwise omit it entirely.
+
+Collect every IMPROVEMENTS bullet from every **surviving** subagent report. A report is surviving iff (a) it was not excluded for parse failure under the rule in "Subagent failures and lenient parsing", AND (b) its tuple was not dropped under the "Hallucinated-target tuple drop" rule. If a tuple was dropped for any reason, every report inside it (the rater and any adversaries that may have parsed) contributes zero bullets. If a single adversary was excluded but its tuple survived, only that adversary's bullets are dropped; the rater's and surviving co-adversaries' bullets are kept.
+
+Skip any report whose **entire IMPROVEMENTS block** is a literal "none". Concretely: locate the IMPROVEMENTS label using the same lenient label parsing as in "Subagent failures and lenient parsing" (case-insensitive, optional leading whitespace, optional surrounding markdown emphasis markers `**` / `*` / `__` / `_`, trailing punctuation tolerated). Take the block content from after that label through the end of the report (or up to the next recognized field label, if the subagent kept writing past it). Strip surrounding whitespace and skip iff the result, lowercased and with any single trailing `.` removed, equals `none`. A report whose IMPROVEMENTS section starts with the word "none" but then continues with prose or bullets does NOT match — extract its bullets normally.
+
+Bullet extraction from a non-skipped IMPROVEMENTS block: each non-empty line after `IMPROVEMENTS:` whose first non-whitespace character is `-`, `*`, `•`, `–` (en-dash), or `—` (em-dash), **or** which begins with a numbered/lettered list marker (`1.`, `1)`, `a.`, `i.`, etc.), starts a new bullet. Strip the marker and surrounding whitespace. **Continuation lines** — non-empty, non-bullet lines that immediately follow a bullet line and are *visibly indented* (more leading whitespace than the bullet's marker column) — are folded into that bullet, joined with a single space. A non-indented non-bullet line terminates the current bullet (do NOT fold it). Blank lines also terminate the current bullet. Ignore prose that isn't attached to any bullet (e.g., a stray sentence before the first bullet, or a non-indented sentence between bullets). If the IMPROVEMENTS block contains no bullet markers at all (only prose), the report contributes zero bullets — do not invent bullets from prose.
+
+After extraction, **filter out null-improvement bullets**: drop any bullet whose stripped text (case-insensitive, trailing punctuation ignored) matches one of `none`, `n/a`, `na`, `nothing`, `nothing actionable`, `no improvements`, `no improvement`, `no changes`, `no change`, `no fix`, `no fixes`, `nothing to fix`, `nothing to improve`, or any close paraphrase. These are no-op bullets that subagents emit when they had nothing to flag but couldn't bring themselves to use the prescribed `IMPROVEMENTS: none` form — they must not pollute the synthesized improvements list. If filtering removes every bullet from a report, that report contributes zero bullets (same as if its block had been the literal "none" form).
+
+If no bullets remain after exclusions, skips, and the null-improvement filter, keep the "Actionable improvements" heading and render the section's body as a single line — "_No actionable improvements surfaced in this sample._" — then stop.
+
+Otherwise deduplicate: when multiple **distinct agents** surfaced the same fix for the same file/line (a single agent listing two near-duplicate bullets counts as one contributor, not two), merge them into one bullet and note the multiplicity as a confidence signal. If two fixes target the same file/line but propose mutually exclusive changes, keep both bullets and tag them `(conflicting suggestions — operator must choose)`. Then group and prioritize:
+
+- **High priority** — non-stylistic fixes that multiple distinct agents converged on (across tuples or within a tuple), OR correctness/security fixes; additionally, any **non-stylistic** fix sourced from a tuple that meets the disagreement threshold defined in "Notable disagreements" above — i.e., when K ≥ 1, |adversary − original| ≥ 0.15 for any adversary in the tuple; when K ≥ 2, additionally max − min ≥ 0.15 across all surviving ratings in the tuple. This applies to every threshold-meeting tuple, regardless of whether it made the displayed top 3-5. The disagreement signals a contentious area worth acting on. Stylistic/cosmetic fixes never reach High priority — neither convergence nor disagreement elevates them. When K = 0 there is no adversary signal, so only the "multiple distinct agents converged" and "correctness/security" sub-rules apply.
+- **Medium priority** — fixes surfaced by one agent that target a specific file with a concrete change.
+- **Low priority** — stylistic/cosmetic fixes, nice-to-haves.
+
+Render each group as a bulleted list. Each bullet must cite the file path (and line/range when the source provided it), state the concrete change, and — when the same fix was flagged by multiple agents — include a short parenthetical like `(flagged by 3 agents)`. Keep bullets tight; do not re-explain context already covered in the per-target table.
+
+---
+
+## Hard rules
+
+- **N raters, parallel, background.** One message, N Agent calls. Default N = 16; override from first positional argument.
+- **K adversaries per rater, eager.** The moment a rater returns and parses cleanly, spawn its K adversaries — not in a batch at the end. (If the rater report is unparseable, spawn no adversaries; the tuple drops immediately.) Default K = 2; override from second positional argument. K = 0 skips the adversarial pass entirely.
+- **Improve mode is a flag** toggled by the literal token `improve` anywhere in the args. When on, every rater and adversary prompt must include the IMPROVEMENTS extension block, and the final report must include an "Actionable improvements" section synthesized from those blocks. When off, the IMPROVEMENTS block is never requested and the section is omitted.
+- **Adversaries read the target themselves** — they don't just argue from the original's text.
+- **Rating math:** tuple mean per target = arithmetic mean of the surviving ratings for that target (original rater plus its K adversaries — minus any excluded for parse failure or any other exclusion rule below, e.g. hallucinated-target drop; when K = 0 the tuple is just the original, and a tuple with zero surviving ratings — or one explicitly dropped under the hallucinated-target rule — is dropped entirely). Final rating = arithmetic mean of the surviving tuple means. Compute with full float precision; round only the values shown in the per-target table and the final PROBABILISTIC RATING line (2 decimals, standard half-up rounding). If zero tuples survive, do not compute a final rating — emit the fallback line instead (see Step 3). Improve mode does not affect the math.
+- **No file writes.** The final report goes in chat.
+- **Don't pre-fetch** code for raters or adversaries. They do their own reading; that's part of the sample.
+- **Don't normalize or smooth** the spread. Honest variance is the signal.
+- **SEED salt.** Every subagent prompt — every rater and every adversary — must begin with a `SEED:` line containing 8 freshly-generated random English words, space-separated. The 8-word *combination* must be unique across every subagent dispatched by **this single /rate invocation** (uniqueness is scoped to the current run, not globally across past or concurrent invocations) — no two subagents in the run share the same set. Individual words may recur across different sets; only the full set has to differ. Do not explain the field's purpose to subagents and do not reference it elsewhere in the prompt.
+- **State tracking.** Maintain a clear mental model of which raters have returned, which adversaries are still pending per rater, and which tuples are complete. The final synthesis (Step 3) fires the moment the last incomplete tuple becomes complete — no earlier, no later. For runs with N·(K+1) ≥ 24, use TodoWrite to track tuple completion explicitly.
+- **Subagent failures and lenient parsing.** Subagents may prepend prose before the required block — locate the `TARGET:` / `RATING:` / `THESIS:` (and `IMPROVEMENTS:` when applicable) lines and parse from them; strict format-only output is not required. Field labels are matched at the **start of a line** (after stripping leading whitespace and any leading markdown emphasis markers — `**`, `*`, `__`, `_`, or any combination); a label embedded mid-sentence does not count. Match labels case-insensitively and ignore trailing punctuation (e.g. `Rating: 0.7`, `IMPROVEMENTS: None.`, `improvements: none`, `**TARGET:** foo`, `_RATING_: 0.7` are all acceptable). If a field label appears multiple times in one report (multiple `TARGET:`, `RATING:`, `THESIS:`, or `IMPROVEMENTS:` lines), use the **first occurrence** of each and treat any later ones as part of surrounding prose. RATING also accepts values without a leading zero or with extra precision (`.7`, `0.756`) and clamps display rounding to 2 decimals; computations use full precision. When the RATING line carries trailing commentary (`RATING: 0.7 (solid)`, `RATING: 0.7 — solid`, `RATING: 0.7/1.00`), use the **first** numeric token after the label that lies in [0.00, 1.00] as the value; if no such in-range numeric appears on that line, treat as no parseable rating. For TARGET and THESIS, the field's value is everything from after the label up to the next recognized field label or end of report — a value that begins on the line after the label is fine, as long as some non-whitespace content appears before the next field label. RATING is single-line (a number, not multi-line content). If a subagent's response lacks a parseable `RATING:` line with a numeric in [0.00, 1.00], or omits `TARGET:` / `THESIS:`, **or has a whitespace-only value for `TARGET:` or `THESIS:` (no non-whitespace content anywhere from the label to the next field)**, exclude that report entirely — its rating drops from the math AND its IMPROVEMENTS bullets (if any) drop from the improvements list. A **missing or unparseable `IMPROVEMENTS:` block in improve mode is NOT a parse failure** — keep the report (its rating still counts) and treat it as having no improvement bullets. An adversary that **clearly rated a different artifact** than the original's TARGET (e.g., the adversary's TARGET line names a different file or function and the change is not a typo/path correction permitted by the Target stability rule) is also treated as a parse failure: drop its rating from the tuple mean and its IMPROVEMENTS bullets from the improvements list. When applying the "different artifact" rule, be conservative — only drop when the new TARGET clearly names a different file path, function name, or section heading than the original, and no benign explanation (typo correction, path-prefix normalization, alternate naming for the same thing) accounts for the difference. If unclear, keep the adversary. A failed rater drops the entire tuple (and the orchestrator does NOT spawn its K adversaries — see Step 2); a failed adversary just drops its own rating from its tuple's mean. Note any drops with one `_Excluded: <count> — <reason>_` line per distinct exclusion reason, immediately under the per-target table (multiple reasons → multiple lines, one per reason; omit entirely when no exclusions occurred). **Subagents that never return** (background dispatch returned no result by the time every other dispatched subagent has either returned or been resolved) are also treated as parse failures under this rule — wait for the rest, then drop the non-returning ones with reason "no response". Do not block synthesis indefinitely on a stuck subagent; if all other tuples are complete and only one subagent is still pending after a clearly excessive wait, treat it as a non-returning failure and proceed.
+- **Hallucinated-target tuple drop.** If a tuple's rater appears to have rated something that doesn't exist — concretely, K ≥ 1 AND every dispatched adversary in that tuple was excluded with `RATING: n/a` citing inability to locate the artifact (renamed, deleted, or hallucinated) — drop the entire tuple, not just its adversaries. The original rater's rating is excluded from the math and its IMPROVEMENTS bullets are excluded from the synthesized list. Note this with an `_Excluded:_` line giving the count and the reason "rater target appears hallucinated" so the operator knows why the row is missing. This rule does not fire when at least one adversary returned a numeric rating (in that case the artifact does exist and the surviving ratings stay), nor when an adversary was excluded for a non-n/a reason (e.g. "rated a different artifact"), nor when K = 0 (no adversary signal available, so the rater's rating is taken at face value). The drop is applied during Step 3 synthesis (after all subagents have returned) — it does not change Step 2 dispatch behavior.
+- **Target stability.** Adversaries may correct an obvious typo, file path, or one-line description in the rater's TARGET, but must rate the same underlying artifact (file, function, section). They are forbidden from swapping to a different artifact even if they'd rather rate something else nearby. If an adversary genuinely cannot locate the artifact (renamed, deleted, hallucinated, and no obvious correction recovers it), the adversary prompt instructs it to say so in its THESIS and return `RATING: n/a` — the orchestrator treats that as a parse failure under the rule above and drops the adversary from the tuple mean (along with its IMPROVEMENTS bullets, if any).
