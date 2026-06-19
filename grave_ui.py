@@ -56,6 +56,7 @@ class App:
         self.input_var = tk.StringVar()
         self.output_var = tk.StringVar()
         self.api_key_var = tk.StringVar()
+        self.model_var = tk.StringVar(value="claude-sonnet-4-6")
         self.dry_run_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="Ready.")
         self.preview_var = tk.StringVar(value="")
@@ -108,8 +109,16 @@ class App:
         )
         ttk.Button(top, text="Save", command=self._save_settings).grid(row=2, column=2, padx=4, pady=4)
 
+        ttk.Label(top, text="Model").grid(row=3, column=0, sticky="w", padx=4, pady=4)
+        self.model_combo = ttk.Combobox(
+            top, textvariable=self.model_var, state="readonly", width=30,
+            values=["claude-sonnet-4-6", "claude-opus-4-8"],
+        )
+        self.model_combo.grid(row=3, column=1, sticky="w", padx=4, pady=4)
+        self.model_combo.bind("<<ComboboxSelected>>", lambda _e: self._save_settings())
+
         ttk.Label(top, textvariable=self.preview_var, foreground="#555").grid(
-            row=3, column=0, columnspan=3, sticky="w", padx=4, pady=(2, 0)
+            row=4, column=0, columnspan=3, sticky="w", padx=4, pady=(2, 0)
         )
 
         ctrl = ttk.Frame(self.root)
@@ -309,6 +318,7 @@ class App:
             "--input", str(in_dir),
             "--output", str(out_dir),
             "--verbose",
+            "--model", self.model_var.get(),
         ]
         if self.dry_run_var.get():
             cmd.append("--dry-run")
@@ -599,12 +609,14 @@ class App:
             self.btn_out.configure(state="disabled")
             self.btn_open_csv.configure(state="disabled")
             self.btn_open_byhand.configure(state="disabled")
+            self.model_combo.configure(state="disabled")
             self.status_var.set("Starting…")
         else:
             self.btn_start.configure(state="normal")
             self.btn_stop.configure(state="disabled")
             self.btn_in.configure(state="normal")
             self.btn_out.configure(state="normal")
+            self.model_combo.configure(state="readonly")
 
     def _reset_run_state(self):
         self.counters = {"ok": 0, "partial": 0, "failed": 0}
@@ -699,6 +711,8 @@ class App:
                 self.output_var.set(data["output"])
             if isinstance(data.get("api_key"), str):
                 self.api_key_var.set(data["api_key"])
+            if isinstance(data.get("model"), str):
+                self.model_var.set(data["model"])
         except (OSError, json.JSONDecodeError):
             pass
 
@@ -711,6 +725,7 @@ class App:
                         "input": self.input_var.get(),
                         "output": self.output_var.get(),
                         "api_key": self.api_key_var.get(),
+                        "model": self.model_var.get(),
                     },
                     f,
                 )
