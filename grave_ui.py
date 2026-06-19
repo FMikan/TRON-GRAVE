@@ -18,11 +18,6 @@ from tkinter.scrolledtext import ScrolledText
 
 from dotenv import load_dotenv
 
-try:
-    import sv_ttk
-except ImportError:
-    sv_ttk = None
-
 from extractor.file_utils import is_supported_image
 
 
@@ -88,14 +83,80 @@ class App:
     # ----- UI construction --------------------------------------------------
 
     def _apply_theme(self):
-        """Apply the modern Sun Valley dark theme; degrade gracefully if absent."""
-        self._bg = "#1c1c1c"
-        if sv_ttk is not None:
-            try:
-                sv_ttk.set_theme("dark")
-            except tk.TclError:
-                pass
-        self.root.configure(background=self._bg)
+        """Hand-crafted flat dark theme on the ttk 'clam' base — no extra dependencies."""
+        BG = "#16181d"          # window background
+        SURFACE = "#1e2127"     # popups / dropdown list
+        INPUT = "#2a2e37"       # entries, buttons, troughs
+        TEXT = "#e6e6e6"
+        MUTED = "#9aa0a6"
+        BORDER = "#333945"
+        ACCENT = "#5b8def"
+        ACCENT_HOVER = "#6f9bf2"
+        ACCENT_DOWN = "#4a7ce0"
+        HOVER = "#343a45"
+        DISABLED_BG = "#23262d"
+        DISABLED_FG = "#5b606b"
+
+        self._bg = BG
+        self.root.configure(background=BG)
+
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        base_font = ("Segoe UI", 10)
+        style.configure(".", background=BG, foreground=TEXT, font=base_font,
+                        fieldbackground=INPUT, bordercolor=BORDER,
+                        lightcolor=BG, darkcolor=BG)
+
+        style.configure("TFrame", background=BG)
+        style.configure("TLabel", background=BG, foreground=TEXT, font=base_font)
+        style.configure("Title.TLabel", font=("Segoe UI Semibold", 18), foreground=TEXT)
+        style.configure("Subtitle.TLabel", font=("Segoe UI", 10), foreground=MUTED)
+        style.configure("Muted.TLabel", foreground=MUTED)
+
+        style.configure("TButton", background=INPUT, foreground=TEXT,
+                        borderwidth=0, padding=(14, 8), font=base_font)
+        style.map("TButton",
+                  background=[("disabled", DISABLED_BG), ("pressed", BORDER), ("active", HOVER)],
+                  foreground=[("disabled", DISABLED_FG)])
+
+        style.configure("Accent.TButton", background=ACCENT, foreground="#ffffff",
+                        borderwidth=0, padding=(16, 8), font=("Segoe UI Semibold", 10))
+        style.map("Accent.TButton",
+                  background=[("disabled", DISABLED_BG), ("pressed", ACCENT_DOWN), ("active", ACCENT_HOVER)],
+                  foreground=[("disabled", DISABLED_FG)])
+
+        style.configure("TEntry", fieldbackground=INPUT, foreground=TEXT,
+                        bordercolor=BORDER, insertcolor=TEXT, padding=6)
+        style.map("TEntry",
+                  fieldbackground=[("readonly", INPUT)],
+                  foreground=[("readonly", TEXT)],
+                  bordercolor=[("focus", ACCENT)])
+
+        style.configure("TCombobox", fieldbackground=INPUT, background=INPUT,
+                        foreground=TEXT, arrowcolor=TEXT, bordercolor=BORDER, padding=5)
+        style.map("TCombobox",
+                  fieldbackground=[("readonly", INPUT)],
+                  foreground=[("readonly", TEXT)],
+                  bordercolor=[("focus", ACCENT)],
+                  arrowcolor=[("disabled", DISABLED_FG)])
+        self.root.option_add("*TCombobox*Listbox.background", SURFACE)
+        self.root.option_add("*TCombobox*Listbox.foreground", TEXT)
+        self.root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
+        self.root.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
+
+        style.configure("TCheckbutton", background=BG, foreground=TEXT)
+        style.map("TCheckbutton", background=[("active", BG)])
+
+        style.configure("TProgressbar", troughcolor=INPUT, background=ACCENT,
+                        bordercolor=BG, lightcolor=ACCENT, darkcolor=ACCENT, thickness=8)
+
+        style.configure("TScrollbar", troughcolor=BG, background=INPUT,
+                        bordercolor=BG, arrowcolor=MUTED)
+        style.map("TScrollbar", background=[("active", BORDER)])
 
     def _build_ui(self):
         self.root.columnconfigure(0, weight=1)
@@ -189,15 +250,16 @@ class App:
         log_frame.columnconfigure(0, weight=1)
 
         self.log = ScrolledText(
-            log_frame, wrap="none", height=15, borderwidth=0,
-            font=("Cascadia Mono", 10), state="disabled",
-            background="#181818", foreground="#dcdcdc", insertbackground="#dcdcdc",
+            log_frame, wrap="none", height=15, borderwidth=0, relief="flat",
+            font=("Consolas", 10), state="disabled",
+            background="#15171c", foreground="#e6e6e6", insertbackground="#e6e6e6",
+            selectbackground="#3a4a6b",
         )
         self.log.grid(row=0, column=0, sticky="nsew")
-        self.log.tag_config("stderr", foreground="#ff8a8a")
-        self.log.tag_config("info", foreground="#8acfff")
-        self.log.tag_config("done", foreground="#8aff9a")
-        self.log.tag_config("search", background="#5e4400")
+        self.log.tag_config("stderr", foreground="#ff7b72")
+        self.log.tag_config("info", foreground="#79b8ff")
+        self.log.tag_config("done", foreground="#7ee787")
+        self.log.tag_config("search", background="#4a3a00")
 
         hbar = ttk.Scrollbar(log_frame, orient="horizontal", command=self.log.xview)
         hbar.grid(row=1, column=0, sticky="ew")
