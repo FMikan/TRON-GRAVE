@@ -18,6 +18,11 @@ from tkinter.scrolledtext import ScrolledText
 
 from dotenv import load_dotenv
 
+try:
+    import sv_ttk
+except ImportError:
+    sv_ttk = None
+
 from extractor.file_utils import is_supported_image
 
 
@@ -73,6 +78,7 @@ class App:
         self._search_index = "1.0"
 
         self._load_settings()
+        self._apply_theme()
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         atexit.register(self._atexit_kill)
@@ -81,56 +87,78 @@ class App:
 
     # ----- UI construction --------------------------------------------------
 
+    def _apply_theme(self):
+        """Apply the modern Sun Valley dark theme; degrade gracefully if absent."""
+        self._bg = "#1c1c1c"
+        if sv_ttk is not None:
+            try:
+                sv_ttk.set_theme("dark")
+            except tk.TclError:
+                pass
+        self.root.configure(background=self._bg)
+
     def _build_ui(self):
         self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(3, weight=1)
+        self.root.rowconfigure(4, weight=1)
+
+        header = ttk.Frame(self.root)
+        header.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 6))
+        ttk.Label(header, text="TRON-GRAVE", font=("Segoe UI Semibold", 17)).grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Label(
+            header, text="Tombstone inscription extractor",
+            font=("Segoe UI", 9), foreground="#9aa0a6",
+        ).grid(row=1, column=0, sticky="w")
 
         top = ttk.Frame(self.root)
-        top.grid(row=0, column=0, sticky="ew", padx=6, pady=6)
+        top.grid(row=1, column=0, sticky="ew", padx=14, pady=6)
         top.columnconfigure(1, weight=1)
 
-        ttk.Label(top, text="Input folder").grid(row=0, column=0, sticky="w", padx=4, pady=4)
+        ttk.Label(top, text="Input folder").grid(row=0, column=0, sticky="w", padx=6, pady=6)
         ttk.Entry(top, textvariable=self.input_var, state="readonly").grid(
-            row=0, column=1, sticky="ew", padx=4, pady=4
+            row=0, column=1, sticky="ew", padx=6, pady=6
         )
         self.btn_in = ttk.Button(top, text="Browse…", command=self._pick_input)
-        self.btn_in.grid(row=0, column=2, padx=4, pady=4)
+        self.btn_in.grid(row=0, column=2, padx=6, pady=6)
 
-        ttk.Label(top, text="Output folder").grid(row=1, column=0, sticky="w", padx=4, pady=4)
+        ttk.Label(top, text="Output folder").grid(row=1, column=0, sticky="w", padx=6, pady=6)
         ttk.Entry(top, textvariable=self.output_var, state="readonly").grid(
-            row=1, column=1, sticky="ew", padx=4, pady=4
+            row=1, column=1, sticky="ew", padx=6, pady=6
         )
         self.btn_out = ttk.Button(top, text="Browse…", command=self._pick_output)
-        self.btn_out.grid(row=1, column=2, padx=4, pady=4)
+        self.btn_out.grid(row=1, column=2, padx=6, pady=6)
 
-        ttk.Label(top, text="API Key").grid(row=2, column=0, sticky="w", padx=4, pady=4)
-        ttk.Entry(top, textvariable=self.api_key_var, show="*").grid(
-            row=2, column=1, sticky="ew", padx=4, pady=4
+        ttk.Label(top, text="API Key").grid(row=2, column=0, sticky="w", padx=6, pady=6)
+        ttk.Entry(top, textvariable=self.api_key_var, show="•").grid(
+            row=2, column=1, sticky="ew", padx=6, pady=6
         )
-        ttk.Button(top, text="Save", command=self._save_settings).grid(row=2, column=2, padx=4, pady=4)
+        ttk.Button(top, text="Save", command=self._save_settings).grid(row=2, column=2, padx=6, pady=6)
 
-        ttk.Label(top, text="Model").grid(row=3, column=0, sticky="w", padx=4, pady=4)
+        ttk.Label(top, text="Model").grid(row=3, column=0, sticky="w", padx=6, pady=6)
         self.model_combo = ttk.Combobox(
             top, textvariable=self.model_var, state="readonly", width=30,
             values=["claude-sonnet-4-6", "claude-opus-4-8"],
         )
-        self.model_combo.grid(row=3, column=1, sticky="w", padx=4, pady=4)
+        self.model_combo.grid(row=3, column=1, sticky="w", padx=6, pady=6)
         self.model_combo.bind("<<ComboboxSelected>>", lambda _e: self._save_settings())
 
-        ttk.Label(top, textvariable=self.preview_var, foreground="#555").grid(
-            row=4, column=0, columnspan=3, sticky="w", padx=4, pady=(2, 0)
+        ttk.Label(top, textvariable=self.preview_var, foreground="#9aa0a6").grid(
+            row=4, column=0, columnspan=3, sticky="w", padx=6, pady=(2, 0)
         )
 
         ctrl = ttk.Frame(self.root)
-        ctrl.grid(row=1, column=0, sticky="ew", padx=6)
+        ctrl.grid(row=2, column=0, sticky="ew", padx=14)
         ctrl.columnconfigure(4, weight=1)
 
-        self.btn_start = ttk.Button(ctrl, text="Start", command=self._on_start)
-        self.btn_start.grid(row=0, column=0, padx=4, pady=4)
+        self.btn_start = ttk.Button(
+            ctrl, text="▶  Start", command=self._on_start, style="Accent.TButton"
+        )
+        self.btn_start.grid(row=0, column=0, padx=(0, 6), pady=4)
         self.btn_stop = ttk.Button(ctrl, text="Stop", command=self._on_stop, state="disabled")
-        self.btn_stop.grid(row=0, column=1, padx=4, pady=4)
+        self.btn_stop.grid(row=0, column=1, padx=6, pady=4)
         ttk.Checkbutton(ctrl, text="Dry run (list only)", variable=self.dry_run_var).grid(
-            row=0, column=2, padx=8
+            row=0, column=2, padx=12
         )
 
         self.btn_open_csv = ttk.Button(
@@ -138,32 +166,32 @@ class App:
             command=lambda: self._open_path(Path(self.output_var.get()) / "output.csv"),
             state="disabled",
         )
-        self.btn_open_csv.grid(row=0, column=5, padx=4)
+        self.btn_open_csv.grid(row=0, column=5, padx=6)
         self.btn_open_byhand = ttk.Button(
             ctrl, text="Open byhand/",
             command=lambda: self._open_path(Path(self.output_var.get()) / "byhand"),
             state="disabled",
         )
-        self.btn_open_byhand.grid(row=0, column=6, padx=4)
+        self.btn_open_byhand.grid(row=0, column=6, padx=(6, 0))
 
         prog = ttk.Frame(self.root)
-        prog.grid(row=2, column=0, sticky="ew", padx=6, pady=4)
+        prog.grid(row=3, column=0, sticky="ew", padx=14, pady=8)
         prog.columnconfigure(0, weight=1)
         self.progress = ttk.Progressbar(prog, mode="determinate", maximum=100)
-        self.progress.grid(row=0, column=0, sticky="ew", padx=4)
-        ttk.Label(prog, textvariable=self.status_var).grid(
-            row=1, column=0, sticky="w", padx=4, pady=(2, 0)
+        self.progress.grid(row=0, column=0, sticky="ew")
+        ttk.Label(prog, textvariable=self.status_var, foreground="#9aa0a6").grid(
+            row=1, column=0, sticky="w", pady=(4, 0)
         )
 
         log_frame = ttk.Frame(self.root)
-        log_frame.grid(row=3, column=0, sticky="nsew", padx=6, pady=6)
+        log_frame.grid(row=4, column=0, sticky="nsew", padx=14, pady=(6, 12))
         log_frame.rowconfigure(0, weight=1)
         log_frame.columnconfigure(0, weight=1)
 
         self.log = ScrolledText(
-            log_frame, wrap="none", height=15,
-            font=("Monospace", 9), state="disabled",
-            background="#111", foreground="#ddd", insertbackground="#ddd",
+            log_frame, wrap="none", height=15, borderwidth=0,
+            font=("Cascadia Mono", 10), state="disabled",
+            background="#181818", foreground="#dcdcdc", insertbackground="#dcdcdc",
         )
         self.log.grid(row=0, column=0, sticky="nsew")
         self.log.tag_config("stderr", foreground="#ff8a8a")
@@ -302,9 +330,6 @@ class App:
                 try:
                     if choice:
                         existing.replace(out_dir / "output.csv.bak")
-                    errors_path = out_dir / "errors.txt"
-                    if errors_path.exists():
-                        errors_path.replace(out_dir / "errors.txt.bak")
                 except OSError as e:
                     messagebox.showerror("Cannot rotate files", str(e))
                     self._release_lock()
@@ -675,7 +700,7 @@ class App:
     # ----- search bar -------------------------------------------------------
 
     def _show_search(self):
-        self.search_frame.grid(row=4, column=0, sticky="ew")
+        self.search_frame.grid(row=5, column=0, sticky="ew", padx=14, pady=(0, 8))
         self._search_entry.focus_set()
         self._search_entry.select_range(0, "end")
 

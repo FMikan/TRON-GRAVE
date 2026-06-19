@@ -1,7 +1,7 @@
 import csv
 from pathlib import Path
 
-CSV_COLUMNS = ['ID', 'Name', 'Surname', 'Year of Birth', 'Year of Death']
+CSV_COLUMNS = ['ID', 'Name', 'Surname', 'Year of Birth', 'Year of Death', 'Notes']
 
 
 def init_csv(output_path: Path) -> None:

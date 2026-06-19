@@ -11,9 +11,8 @@ import anthropic
 from dotenv import load_dotenv
 
 from extractor.csv_writer import append_rows, init_csv
-from extractor.error_logger import log_error
 from extractor.file_utils import copy_to_byhand, extract_id, is_supported_image
-from extractor.image_processor import process_image
+from extractor.image_processor import NOTE_INDEX, process_image
 
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
@@ -26,7 +25,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--input", required=True, type=Path, help="Folder containing image files")
     parser.add_argument("--output", type=Path, default=Path("./output"),
-                        help="Directory for output.csv, errors.txt, and byhand/ (default: ./output)")
+                        help="Directory for output.csv and byhand/ (default: ./output)")
     parser.add_argument("--model", default=None,
                         help=f"Claude model (default: CLAUDE_MODEL env, else {DEFAULT_MODEL})")
     parser.add_argument("--dry-run", action="store_true",
@@ -78,7 +77,6 @@ def main() -> int:
         fatal(f"Cannot create output directory {output_dir}: {e}")
 
     output_csv = output_dir / "output.csv"
-    errors_path = output_dir / "errors.txt"
     byhand_dir = output_dir / "byhand"
 
     try:
@@ -99,10 +97,6 @@ def main() -> int:
     for idx, img in enumerate(images, start=1):
         record_id, matched = extract_id(img)
 
-        if not matched:
-            log_error(errors_path, record_id, "Filename did not match expected pattern; stem used as ID")
-            had_any_issue = True
-
         if args.verbose:
             print(f"[{idx}/{total}] Processing {img.name} ... ", end="", flush=True)
 
@@ -116,6 +110,13 @@ def main() -> int:
 
         first_api_call_done = True
 
+        if not matched:
+            # No errors.txt anymore: flag the non-standard filename in the Notes cell.
+            for row in result.rows:
+                tag = "ID iz naziva datoteke"
+                row[NOTE_INDEX] = f"{row[NOTE_INDEX]}; {tag}" if row[NOTE_INDEX] else tag
+            had_any_issue = True
+
         append_rows(output_csv, result.rows)
 
         if result.status == "full_success":
@@ -124,7 +125,6 @@ def main() -> int:
                 n = len(result.rows)
                 print(f"OK ({n} record{'s' if n != 1 else ''})")
         elif result.status == "partial_success":
-            log_error(errors_path, record_id, result.reason)
             copy_to_byhand(img, byhand_dir)
             byhand_count += 1
             partial += 1
@@ -132,7 +132,6 @@ def main() -> int:
             if args.verbose:
                 print(f"PARTIAL ({result.reason})")
         else:
-            log_error(errors_path, record_id, result.reason)
             copy_to_byhand(img, byhand_dir)
             byhand_count += 1
             failed += 1
@@ -142,8 +141,6 @@ def main() -> int:
 
     print(f"Done. {total} images processed. {succeeded} succeeded, {partial} partial, {failed} failed.")
     print(f"Output:  {output_csv}")
-    if errors_path.exists():
-        print(f"Errors:  {errors_path}")
     if byhand_count > 0:
         print(f"Review:  {byhand_dir}/ ({byhand_count} images)")
 

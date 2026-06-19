@@ -11,15 +11,17 @@ Designed for digitizing Croatian cemetery records, with full support for Croatia
 ## Features
 
 - **AI-powered OCR** — reads tombstone inscriptions using Claude Vision (Anthropic API)
+- **Model selection** — choose between **Claude Sonnet 4.6** (fast, cheaper) and **Claude Opus 4.8** (most capable) from the GUI dropdown or the `--model` CLI flag
 - **Multi-person tombstones** — extracts records for each person on a single stone
 - **Conservative extraction** — leaves fields blank rather than guessing uncertain data
+- **Smart year-of-death handling** — distinguishes a *certain* absence (person still living, only a birth year inscribed) from an *unreadable* year, so living people are not needlessly flagged for review
 - **Batch processing** — processes entire folders of images automatically
 - **Smart image compression** — auto-resizes oversized images to fit API requirements
-- **Manual review queue** — copies unreadable images to a `byhand/` folder for manual inspection
-- **Error log** — records all failures and partial extractions to `errors.txt`
+- **Manual review queue** — copies images needing review to a `byhand/` folder for manual inspection
+- **Notes column** — every edge case (uncertain year, missing field, non-standard filename) is explained inline in the CSV's `Notes` column
 - **Real-time progress** — GUI shows progress bar, ETA, and running API cost estimate
 - **Automatic retries** — retries failed API calls with exponential backoff
-- **Settings persistence** — remembers your folders and API key between sessions
+- **Settings persistence** — remembers your folders, API key, and chosen model between sessions
 - **Dry-run mode** — preview image discovery without making any API calls
 - **Croatian & Cyrillic support** — outputs in Croatian with automatic Cyrillic transliteration
 
@@ -34,14 +36,27 @@ For each processed folder, TRON-GRAVE creates:
 
 **`output.csv`** — UTF-8 with BOM (Excel-compatible)
 ```
-ID,Name,Surname,Year of Birth,Year of Death
-img001,Ivan,Horvat,1921,1987
-img002,Marija,Horvat,1925,2003
+ID,Name,Surname,Year of Birth,Year of Death,Notes
+img001,Ivan,Horvat,1921,1987,
+img002,Marija,Horvat,1925,,bez godine smrti — osoba vjerojatno živa
+img003,Petar,Kovač,1940,,godina smrti nečitka
 ```
 
-**`errors.txt`** — list of images that could not be fully processed
+The **`Notes`** column (Croatian) is filled only for edge cases and is the single place
+to look when reviewing results. Typical notes:
 
-**`byhand/`** — copies of images flagged for manual review
+| Note | Meaning | Sent to `byhand/`? |
+|------|---------|--------------------|
+| *(empty)* | Full record, nothing to review | No |
+| `bez godine smrti — …` | Model is certain there is no year of death (e.g. person still living) | No — counts as **OK** |
+| `godina smrti nečitka` | A year of death may exist but could not be read | Yes — **PARTIAL** |
+| `nedostaje: prezime` | A required field (name / surname / birth year) is illegible | Yes — **PARTIAL** |
+| `sva polja nečitka`, `model nije vratio podatke` | Nothing could be extracted | Yes — **FAILED** |
+| `… ID iz naziva datoteke` | Filename did not match the expected pattern; the stem was used as ID | No (appended to any note) |
+
+**`byhand/`** — copies of images flagged for manual review (PARTIAL or FAILED rows above)
+
+> There is no longer a separate `errors.txt`; all review information now lives in the `Notes` column.
 
 ---
 
@@ -62,7 +77,10 @@ TRON-GRAVE uses the **Anthropic Claude API** to analyze tombstone images. You ne
 4. Click **Create Key**, give it a name, and copy the key
 5. Paste the key into TRON-GRAVE when prompted (GUI) or into your `.env` file (CLI)
 
-**Estimated cost:** approximately **$0.005 per image** (~$5 per 1,000 photos) using the default Claude Sonnet model.
+**Estimated cost:** approximately **$0.005 per image** (~$5 per 1,000 photos) using the default
+**Claude Sonnet 4.6** model. **Claude Opus 4.8** is more accurate on hard-to-read stones but costs
+several times more per image — pick it from the model dropdown (GUI) or `--model claude-opus-4-8` (CLI)
+when accuracy matters more than cost.
 
 ---
 
@@ -74,7 +92,8 @@ TRON-GRAVE uses the **Anthropic Claude API** to analyze tombstone images. You ne
 2. Download the latest `TRON-GRAVE.exe`
 3. Double-click to run — no Python or installation required
 4. Enter your Anthropic API key when prompted on first launch
-5. Select your input folder (photos) and output folder, then click **Start**
+5. (Optional) Pick a model from the **Model** dropdown — Sonnet 4.6 (default) or Opus 4.8
+6. Select your input folder (photos) and output folder, then click **Start**
 
 ---
 
@@ -171,10 +190,13 @@ python grave_extractor.py [OPTIONS]
 Options:
   --input   PATH     Folder containing tombstone images (required)
   --output  PATH     Folder where results will be saved (required)
-  --model   NAME     Claude model to use (default: claude-sonnet-4-6)
+  --model   NAME     Claude model to use (default: claude-sonnet-4-6).
+                     Common values: claude-sonnet-4-6, claude-opus-4-8
   --verbose          Show detailed per-image progress
   --dry-run          List discovered images without making any API calls
 ```
+
+The model can also be set with the `CLAUDE_MODEL` environment variable; the `--model` flag takes precedence.
 
 **Exit codes:**
 - `0` — All images processed successfully
@@ -192,10 +214,9 @@ TRON-GRAVE/
 ├── grave_ui.py             # Desktop GUI (Tkinter)
 ├── grave_extractor.py      # CLI batch processor
 ├── extractor/
-│   ├── image_processor.py  # Claude Vision API integration
+│   ├── image_processor.py  # Claude Vision API integration + result classification
 │   ├── csv_writer.py       # CSV output (UTF-8 with BOM)
-│   ├── file_utils.py       # File validation and MIME detection
-│   └── error_logger.py     # Error log writing
+│   └── file_utils.py       # File validation and MIME detection
 ├── requirements.txt        # Python dependencies
 ├── TRON-GRAVE.spec         # PyInstaller build config
 └── .env.example            # API key template
