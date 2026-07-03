@@ -41,6 +41,15 @@ MAX_LINE_CHARS = 4096
 COST_PER_IMAGE = 0.005
 SECS_PER_IMAGE_GUESS = 4
 
+MODELS = ["claude-sonnet-5", "claude-opus-4-8", "claude-sonnet-4-6"]
+EFFORT_LEVELS_ALL = ["low", "medium", "high", "xhigh", "max"]
+# xhigh is not supported on the Sonnet 4.x family; everything else takes all levels.
+EFFORT_BY_MODEL = {
+    "claude-sonnet-5":   ["low", "medium", "high", "xhigh", "max"],
+    "claude-opus-4-8":   ["low", "medium", "high", "xhigh", "max"],
+    "claude-sonnet-4-6": ["low", "medium", "high", "max"],
+}
+
 PROGRESS_RE = re.compile(r"^\[(\d+)/(\d+)\]\s")
 RESULT_RE = re.compile(r"\b(OK|PARTIAL|FAILED)(?:\s|\()")
 DONE_RE = re.compile(r"^Done\. \d+ images processed")
@@ -57,6 +66,7 @@ class App:
         self.output_var = tk.StringVar()
         self.api_key_var = tk.StringVar()
         self.model_var = tk.StringVar(value="claude-sonnet-4-6")
+        self.effort_var = tk.StringVar(value="high")
         self.dry_run_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="Ready.")
         self.preview_var = tk.StringVar(value="")
@@ -199,13 +209,21 @@ class App:
         ttk.Label(top, text="Model").grid(row=3, column=0, sticky="w", padx=6, pady=6)
         self.model_combo = ttk.Combobox(
             top, textvariable=self.model_var, state="readonly", width=30,
-            values=["claude-sonnet-4-6", "claude-opus-4-8"],
+            values=MODELS,
         )
         self.model_combo.grid(row=3, column=1, sticky="w", padx=6, pady=6)
-        self.model_combo.bind("<<ComboboxSelected>>", lambda _e: self._save_settings())
+        self.model_combo.bind("<<ComboboxSelected>>", self._on_model_change)
+
+        ttk.Label(top, text="Effort").grid(row=4, column=0, sticky="w", padx=6, pady=6)
+        self.effort_combo = ttk.Combobox(
+            top, textvariable=self.effort_var, state="readonly", width=30,
+        )
+        self.effort_combo.grid(row=4, column=1, sticky="w", padx=6, pady=6)
+        self.effort_combo.bind("<<ComboboxSelected>>", lambda _e: self._save_settings())
+        self._refresh_effort_options()
 
         ttk.Label(top, textvariable=self.preview_var, foreground="#9aa0a6").grid(
-            row=4, column=0, columnspan=3, sticky="w", padx=6, pady=(2, 0)
+            row=5, column=0, columnspan=3, sticky="w", padx=6, pady=(2, 0)
         )
 
         ctrl = ttk.Frame(self.root)
@@ -275,6 +293,19 @@ class App:
 
         self.root.bind("<Control-f>", lambda _e: self._show_search())
         self.root.bind("<Escape>", lambda _e: self._hide_search())
+
+    # ----- model / effort ---------------------------------------------------
+
+    def _refresh_effort_options(self):
+        """Show only the effort levels the selected model accepts, clamping if needed."""
+        valid = EFFORT_BY_MODEL.get(self.model_var.get(), EFFORT_LEVELS_ALL)
+        self.effort_combo.configure(values=valid)
+        if self.effort_var.get() not in valid:
+            self.effort_var.set("high" if "high" in valid else valid[-1])
+
+    def _on_model_change(self, _event=None):
+        self._refresh_effort_options()
+        self._save_settings()
 
     # ----- folder picking + preview -----------------------------------------
 
@@ -406,6 +437,7 @@ class App:
             "--output", str(out_dir),
             "--verbose",
             "--model", self.model_var.get(),
+            "--effort", self.effort_var.get(),
         ]
         if self.dry_run_var.get():
             cmd.append("--dry-run")
@@ -697,6 +729,7 @@ class App:
             self.btn_open_csv.configure(state="disabled")
             self.btn_open_byhand.configure(state="disabled")
             self.model_combo.configure(state="disabled")
+            self.effort_combo.configure(state="disabled")
             self.status_var.set("Starting…")
         else:
             self.btn_start.configure(state="normal")
@@ -704,6 +737,7 @@ class App:
             self.btn_in.configure(state="normal")
             self.btn_out.configure(state="normal")
             self.model_combo.configure(state="readonly")
+            self.effort_combo.configure(state="readonly")
 
     def _reset_run_state(self):
         self.counters = {"ok": 0, "partial": 0, "failed": 0}
@@ -800,6 +834,8 @@ class App:
                 self.api_key_var.set(data["api_key"])
             if isinstance(data.get("model"), str):
                 self.model_var.set(data["model"])
+            if isinstance(data.get("effort"), str):
+                self.effort_var.set(data["effort"])
         except (OSError, json.JSONDecodeError):
             pass
 
@@ -813,6 +849,7 @@ class App:
                         "output": self.output_var.get(),
                         "api_key": self.api_key_var.get(),
                         "model": self.model_var.get(),
+                        "effort": self.effort_var.get(),
                     },
                     f,
                 )

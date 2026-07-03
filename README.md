@@ -11,10 +11,13 @@ Designed for digitizing Croatian cemetery records, with full support for Croatia
 ## Features
 
 - **AI-powered OCR** — reads tombstone inscriptions using Claude Vision (Anthropic API)
-- **Model selection** — choose between **Claude Sonnet 4.6** (fast, cheaper) and **Claude Opus 4.8** (most capable) from the GUI dropdown or the `--model` CLI flag
+- **Model selection** — choose between **Claude Sonnet 5**, **Claude Sonnet 4.6** (cheaper) and **Claude Opus 4.8** from the GUI dropdown or the `--model` CLI flag
+- **Effort control** — pick how hard the model works per image (`low` → `max`) from the GUI dropdown or `--effort`; the choices adapt to the selected model
 - **Multi-person tombstones** — extracts records for each person on a single stone
+- **Multi-marker graves** — reads *all* plaques, headstones and crosses that belong to one grave (shared frame, surname, grouping or style), instead of stopping at the first one; ambiguous neighbours are flagged for manual review rather than guessed
 - **Conservative extraction** — leaves fields blank rather than guessing uncertain data
-- **Smart year-of-death handling** — distinguishes a *certain* absence (person still living, only a birth year inscribed) from an *unreadable* year, so living people are not needlessly flagged for review
+- **Smart year handling** — for both birth and death years, distinguishes a *certain* absence (e.g. person still living, or no birth date inscribed) from an *unreadable* year, so records with a legitimately missing year are passed as **OK** instead of being needlessly flagged for review
+- **Prompt caching** — on Sonnet 4.6 / Sonnet 5, the shared instructions are cached after the first image and reused for the rest of the run, cutting the per-image system-prompt cost by ~90% for the whole batch (not supported on Opus 4.8 — its prompt falls under the cache minimum)
 - **Batch processing** — processes entire folders of images automatically
 - **Smart image compression** — auto-resizes oversized images to fit API requirements
 - **Manual review queue** — copies images needing review to a `byhand/` folder for manual inspection
@@ -48,11 +51,16 @@ to look when reviewing results. Typical notes:
 | Note | Meaning | Sent to `byhand/`? |
 |------|---------|--------------------|
 | *(empty)* | Full record, nothing to review | No |
-| `bez godine smrti — …` | Model is certain there is no year of death (e.g. person still living) | No — counts as **OK** |
-| `godina smrti nečitka` | A year of death may exist but could not be read | Yes — **PARTIAL** |
-| `nedostaje: prezime` | A required field (name / surname / birth year) is illegible | Yes — **PARTIAL** |
-| `sva polja nečitka`, `model nije vratio podatke` | Nothing could be extracted | Yes — **FAILED** |
-| `… ID iz naziva datoteke` | Filename did not match the expected pattern; the stem was used as ID | No (appended to any note) |
+| `bez god. smrti` | Model is certain there is no year of death (e.g. person still living) | No — counts as **OK** |
+| `bez god. rođenja` | Model is certain there is no year of birth inscribed | No — counts as **OK** |
+| `bez god. rođ. i smrti` | Model is certain neither a birth nor a death year exists | No — counts as **OK** |
+| `god. smrti nečitka` / `god. rođenja nečitka` | A year may exist but could not be read confidently | Yes — **PARTIAL** |
+| `fali: prezime` | Name or surname is illegible | Yes — **PARTIAL** |
+| `provjeri: možda više oznaka` | Nearby plaques/crosses might belong to the same grave; the model left them out to be safe — check for missed people | Yes — **PARTIAL** |
+| `sve nečitko`, `nema podataka` | Nothing could be extracted | Yes — **FAILED** |
+| `… ID iz naziva` | Filename did not match the expected pattern; the stem was used as ID | No (appended to any note) |
+
+The notes are kept intentionally terse to minimise token/CSV size while preserving meaning.
 
 **`byhand/`** — copies of images flagged for manual review (PARTIAL or FAILED rows above)
 
@@ -77,10 +85,14 @@ TRON-GRAVE uses the **Anthropic Claude API** to analyze tombstone images. You ne
 4. Click **Create Key**, give it a name, and copy the key
 5. Paste the key into TRON-GRAVE when prompted (GUI) or into your `.env` file (CLI)
 
-**Estimated cost:** approximately **$0.005 per image** (~$5 per 1,000 photos) using the default
-**Claude Sonnet 4.6** model. **Claude Opus 4.8** is more accurate on hard-to-read stones but costs
-several times more per image — pick it from the model dropdown (GUI) or `--model claude-opus-4-8` (CLI)
-when accuracy matters more than cost.
+**Estimated cost:** roughly **$0.005 per image** (~$5 per 1,000 photos) on the default
+**Claude Sonnet 4.6** model. Alternatives from the model dropdown (GUI) or `--model` (CLI):
+
+- **Claude Sonnet 5** (`claude-sonnet-5`) — newest Sonnet, stronger on hard/worn stones (~$3/$15 per MTok; intro $2/$10 until Aug 31 2026)
+- **Claude Opus 4.8** (`claude-opus-4-8`) — top-tier, costs several times more per image
+
+Higher **effort** levels (`high` → `max`, and `xhigh` on Sonnet 5 / Opus) make the model reason
+harder per image at higher token cost; drop to `low`/`medium` for cheaper, faster runs.
 
 ---
 
@@ -92,7 +104,7 @@ when accuracy matters more than cost.
 2. Download the latest `TRON-GRAVE.exe`
 3. Double-click to run — no Python or installation required
 4. Enter your Anthropic API key when prompted on first launch
-5. (Optional) Pick a model from the **Model** dropdown — Sonnet 4.6 (default) or Opus 4.8
+5. (Optional) Pick a **Model** (Sonnet 4.6 default · Sonnet 5 · Opus 4.8) and an **Effort** level
 6. Select your input folder (photos) and output folder, then click **Start**
 
 ---
@@ -191,7 +203,9 @@ Options:
   --input   PATH     Folder containing tombstone images (required)
   --output  PATH     Folder where results will be saved (required)
   --model   NAME     Claude model to use (default: claude-sonnet-4-6).
-                     Common values: claude-sonnet-4-6, claude-opus-4-8
+                     Common values: claude-sonnet-5, claude-sonnet-4-6, claude-opus-4-8
+  --effort  LEVEL    Reasoning effort: low | medium | high | xhigh | max (default: model's own).
+                     Note: xhigh is not supported on Sonnet 4.6.
   --verbose          Show detailed per-image progress
   --dry-run          List discovered images without making any API calls
 ```

@@ -28,6 +28,9 @@ def parse_args() -> argparse.Namespace:
                         help="Directory for output.csv and byhand/ (default: ./output)")
     parser.add_argument("--model", default=None,
                         help=f"Claude model (default: CLAUDE_MODEL env, else {DEFAULT_MODEL})")
+    parser.add_argument("--effort", default=None,
+                        choices=["low", "medium", "high", "xhigh", "max"],
+                        help="Reasoning/effort level (output_config.effort). Omit for the model default (high).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print images that would be processed and exit")
     parser.add_argument("--verbose", action="store_true",
@@ -100,7 +103,7 @@ def main() -> int:
         if args.verbose:
             print(f"[{idx}/{total}] Processing {img.name} ... ", end="", flush=True)
 
-        result = process_image(client, model, img, record_id)
+        result = process_image(client, model, img, record_id, args.effort)
 
         if result.fatal_api_error and not first_api_call_done:
             if args.verbose:
@@ -113,7 +116,7 @@ def main() -> int:
         if not matched:
             # No errors.txt anymore: flag the non-standard filename in the Notes cell.
             for row in result.rows:
-                tag = "ID iz naziva datoteke"
+                tag = "ID iz naziva"
                 row[NOTE_INDEX] = f"{row[NOTE_INDEX]}; {tag}" if row[NOTE_INDEX] else tag
             had_any_issue = True
 

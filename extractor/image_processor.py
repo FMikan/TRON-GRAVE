@@ -17,17 +17,34 @@ MAX_IMAGE_BYTES = 3_750_000
 SYSTEM_PROMPT = """You are a genealogical data extraction assistant. You will be shown a photograph of a tombstone.
 
 Your task:
-1. Read ONLY the tombstone that is in the foreground and in focus. Ignore any other graves,
-   monuments, or text visible in the background.
-2. Extract the following fields for each person commemorated on this tombstone:
+1. The grave in the foreground may consist of MULTIPLE markers placed together — several plaques,
+   headstones and/or crosses. Read and extract EVERY person from ALL markers that belong to this
+   one grave; do not stop at a single plaque or cross. Treat markers as the SAME grave when they
+   share any of: a common grave frame, border, curb or foundation; the same surname; close physical
+   grouping (side by side, touching, or on the same base); or the same orientation, material and
+   carving style.
+2. IGNORE graves that are clearly separate — in the background, out of focus, or in a different
+   plot separated by a gap or path.
+3. If it is genuinely unclear whether nearby markers belong to this grave or to a separate
+   neighbouring grave, be CONSERVATIVE: do NOT include the uncertain markers, and set
+   "ambiguous_multiple_markers" to true so the photo is flagged for manual review. Otherwise set it
+   to false.
+4. Extract the following fields for each person commemorated on this grave:
    - First name (Name)
    - Family name (Surname)
    - Year of birth (4-digit year only)
    - Year of death (4-digit year only)
-3. If a tombstone commemorates more than one person, return one record per person.
-4. If you are not 100% certain about name, surname or birth_year, set that field to null.
-   Do NOT guess or estimate.
-5. For the year of death you MUST set "death_year_status" for each person:
+5. Return one record per person (a grave with several people yields several records).
+6. If you are not 100% certain about name or surname, set that field to null. Do NOT guess or estimate.
+7. For the year of birth you MUST set "birth_year_status" for each person:
+   - "present": a birth year is clearly legible. Put the 4-digit year in birth_year.
+   - "absent_certain": you are 100% certain NO birth year is inscribed. Use this ONLY with concrete
+     visual evidence — for example only a death year is shown, or the marker records no birth date.
+     Set birth_year to null.
+   - "unreadable": a birth year may be present but you cannot read it confidently (worn, obscured,
+     partially hidden, ambiguous). Set birth_year to null.
+   When in ANY doubt, choose "unreadable" rather than "absent_certain".
+8. For the year of death you MUST set "death_year_status" for each person:
    - "present": a death year is clearly legible. Put the 4-digit year in death_year.
    - "absent_certain": you are 100% certain NO death year exists. Use this ONLY with concrete
      visual evidence — for example only a birth year is inscribed, or a dash / blank space follows
@@ -36,12 +53,33 @@ Your task:
    - "unreadable": a death year may be present but you cannot read it confidently (worn, obscured,
      partially hidden, ambiguous). Set death_year to null.
    When in ANY doubt, choose "unreadable" rather than "absent_certain".
-6. "note": a SHORT note in Croatian (max ~10 words) ONLY for edge cases — e.g. why there is no
-   year of death, or which detail is illegible. Otherwise set it to null.
-7. If the image is completely unreadable, set records to [] and explain why in the error field in
+9. "note": usually null. Only for a genuine edge case, a Croatian note of at most ~6 words
+   (e.g. "osoba živa", "prezime nečitko"). Keep it as short as possible.
+10. If the image is completely unreadable, set records to [] and explain why in the error field in
    one short sentence (max ~10 words).
-8. All text in the output (names, surnames, notes, error messages) must be in Croatian.
-9. If any text on the tombstone is written in Cyrillic script, transliterate it to Croatian Latin script."""
+11. All text in the output (names, surnames, notes, error messages) must be in Croatian.
+12. If any text on the tombstone is written in Cyrillic script, transliterate it to Croatian Latin script.
+
+Worked examples:
+- "IVAN HORVAT 1950 – 2010" (both years clear): birth_year_status="present" (1950),
+  death_year_status="present" (2010).
+- "MARIJA HORVAT 1955 –" (a dash with nothing after it): birth_year_status="present" (1955),
+  death_year_status="absent_certain" — the dash is concrete evidence of no death year yet.
+- "1950 – 20" (second date cut off or worn to two digits): death_year_status="unreadable" —
+  a year was clearly started but cannot be confirmed, so treat it as unreadable, not absent.
+- Only a birth year is carved, with no dash and no visible space left for a second date:
+  birth_year_status="present", death_year_status="absent_certain".
+- A worn, chipped corner obscures what would be the birth year, but the death year is crisp:
+  birth_year_status="unreadable", death_year_status="present".
+- Two crosses on the same concrete base, both carved "HORVAT", touching each other: they are the
+  SAME grave — extract one record per cross.
+- A second, unrelated headstone is visible, blurred, in the background: ignore it entirely — it is
+  a separate grave, not part of this one.
+- A plaque commemorates "IVAN HORVAT 1920–1999" and "MARIJA HORVAT r. KOVAČ 1925–2015" on the same
+  stone: two people, two records, same surname family — this is one grave with two people, not two
+  graves.
+- Text is carved in Cyrillic, e.g. "ХОРВАТ" for the surname: transliterate to Croatian Latin script
+  as "Horvat" before writing the output field; do not leave any field in Cyrillic characters."""
 
 
 _EXTRACT_TOOL = {
@@ -58,6 +96,11 @@ _EXTRACT_TOOL = {
                         "name":       {"type": ["string", "null"]},
                         "surname":    {"type": ["string", "null"]},
                         "birth_year": {"type": ["integer", "null"]},
+                        "birth_year_status": {
+                            "type": "string",
+                            "enum": ["present", "absent_certain", "unreadable"],
+                            "description": "present = legible; absent_certain = surely none (concrete evidence); unreadable = cannot read.",
+                        },
                         "death_year": {"type": ["integer", "null"]},
                         "death_year_status": {
                             "type": "string",
@@ -66,24 +109,35 @@ _EXTRACT_TOOL = {
                         },
                         "note": {"type": ["string", "null"]},
                     },
-                    "required": ["name", "surname", "birth_year", "death_year", "death_year_status", "note"],
+                    "required": ["name", "surname", "birth_year", "birth_year_status", "death_year", "death_year_status", "note"],
                 },
             },
             "error": {"type": ["string", "null"]},
+            "ambiguous_multiple_markers": {
+                "type": "boolean",
+                "description": "true if nearby plaques/crosses might belong to this grave but "
+                               "could not be included confidently (needs manual review); else false.",
+            },
         },
-        "required": ["records", "error"],
+        "required": ["records", "error", "ambiguous_multiple_markers"],
     },
 }
 
+# Cache the system prompt + tool definition (stable across every image in a run).
+# Below the model's minimum cacheable prefix (~2048 tok on Sonnet, ~4096 on Opus)
+# this silently has no effect and no extra cost -- see shared/prompt-caching.md.
+_SYSTEM_BLOCKS = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
+
 _RETRY_DELAYS = [2, 4, 8]
 _RECORD_FIELDS = ('name', 'surname', 'birth_year', 'death_year')
-# name/surname/birth_year missing -> always needs manual review (byhand).
-_CORE_FIELDS = ('name', 'surname', 'birth_year')
-_CORE_LABELS_HR = {'name': 'ime', 'surname': 'prezime', 'birth_year': 'godina rođenja'}
+# Only a missing name/surname forces manual review; birth/death years get a
+# certainty status so a *certain* absence can still pass as OK.
+_CORE_FIELDS = ('name', 'surname')
+_CORE_LABELS_HR = {'name': 'ime', 'surname': 'prezime'}
 
 # Index of the Notes cell in a row, so callers can append to it.
 NOTE_INDEX = 5
-_MAX_NOTE_CHARS = 120
+_MAX_NOTE_CHARS = 60
 
 
 @dataclass
@@ -98,30 +152,48 @@ def _empty_row(record_id: str, note: str = "") -> list:
     return [record_id, "", "", "", "", note]
 
 
-def _death_state(rec: dict) -> str:
-    """Resolve the death-year situation defensively, never trusting a lone flag.
+def _year_state(rec: dict, year_field: str, status_field: str) -> str:
+    """Resolve a year's situation defensively, never trusting a lone flag.
 
     A concrete year always wins. A null only counts as a certain absence when the
     model explicitly says so; anything else (incl. a 'present' flag with no year)
     falls back to 'unreadable' so the image is sent to byhand, not passed as OK.
     """
-    if rec.get("death_year") is not None:
+    if rec.get(year_field) is not None:
         return "present"
-    if rec.get("death_year_status") == "absent_certain":
+    if rec.get(status_field) == "absent_certain":
         return "absent_certain"
     return "unreadable"
 
 
-def _build_note(rec: dict, death_state: str) -> str:
+def _birth_state(rec: dict) -> str:
+    return _year_state(rec, "birth_year", "birth_year_status")
+
+
+def _death_state(rec: dict) -> str:
+    return _year_state(rec, "death_year", "death_year_status")
+
+
+def _build_note(rec: dict, birth_state: str, death_state: str) -> str:
     """Short Croatian note for the CSV Notes column (edge cases only)."""
     bits = []
     missing = [_CORE_LABELS_HR[f] for f in _CORE_FIELDS if rec.get(f) is None]
     if missing:
-        bits.append("nedostaje: " + ", ".join(missing))
-    if death_state == "absent_certain":
-        bits.append("bez godine smrti")
-    elif death_state == "unreadable":
-        bits.append("godina smrti nečitka")
+        bits.append("fali: " + ", ".join(missing))
+
+    # Combine the two "certain absence" cases for brevity.
+    if birth_state == "absent_certain" and death_state == "absent_certain":
+        bits.append("bez god. rođ. i smrti")
+    else:
+        if birth_state == "absent_certain":
+            bits.append("bez god. rođenja")
+        if death_state == "absent_certain":
+            bits.append("bez god. smrti")
+
+    if birth_state == "unreadable":
+        bits.append("god. rođenja nečitka")
+    if death_state == "unreadable":
+        bits.append("god. smrti nečitka")
     base = "; ".join(bits)
 
     model_note = (rec.get("note") or "").strip()
@@ -171,15 +243,19 @@ def _jittered(delay: float) -> float:
     return delay * (1 + random.uniform(-0.25, 0.25))
 
 
-def _call_api(client, model: str, mime: str, b64: str):
-    extra = {} if "opus" in model else {"temperature": 0}
+def _call_api(client, model: str, mime: str, b64: str, effort: str | None = None):
+    # temperature is only accepted on the Sonnet 4.x family. Sonnet 5, Opus 4.7/4.8
+    # and Fable reject it with 400 "temperature is deprecated for this model".
+    params: dict = {"temperature": 0} if "sonnet-4" in model else {}
+    if effort:
+        params["output_config"] = {"effort": effort}
     return client.messages.create(
         model=model,
         max_tokens=1024,
-        system=SYSTEM_PROMPT,
-        **extra,
+        system=_SYSTEM_BLOCKS,
         tools=[_EXTRACT_TOOL],
         tool_choice={"type": "tool", "name": "extract_burial_records"},
+        **params,
         messages=[{
             "role": "user",
             "content": [
@@ -200,13 +276,14 @@ def _call_api(client, model: str, mime: str, b64: str):
     )
 
 
-def process_image(client, model: str, path: Path, record_id: str) -> ImageResult:
+def process_image(client, model: str, path: Path, record_id: str,
+                  effort: str | None = None) -> ImageResult:
     try:
         raw = path.read_bytes()
     except (IOError, OSError):
         return ImageResult(
             status='total_failure',
-            rows=[_empty_row(record_id, "datoteka se ne može otvoriti")],
+            rows=[_empty_row(record_id, "ne mogu otvoriti")],
             reason="File could not be opened or decoded on disk",
         )
 
@@ -217,7 +294,7 @@ def process_image(client, model: str, path: Path, record_id: str) -> ImageResult
         if raw is None:
             return ImageResult(
                 status='total_failure',
-                rows=[_empty_row(record_id, "slika prevelika za obradu")],
+                rows=[_empty_row(record_id, "slika prevelika")],
                 reason="Image too large and could not be recompressed to fit API limit",
             )
         mime = "image/jpeg"
@@ -228,7 +305,7 @@ def process_image(client, model: str, path: Path, record_id: str) -> ImageResult
     response = None
     for attempt in range(4):
         try:
-            response = _call_api(client, model, mime, b64)
+            response = _call_api(client, model, mime, b64, effort)
             break
         except anthropic.APIStatusError as e:
             status_code = getattr(e, 'status_code', None)
@@ -250,7 +327,7 @@ def process_image(client, model: str, path: Path, record_id: str) -> ImageResult
     if response is None:
         return ImageResult(
             status='total_failure',
-            rows=[_empty_row(record_id, "greška API-ja nakon ponovnih pokušaja")],
+            rows=[_empty_row(record_id, "greška API-ja")],
             reason=f"API call failed after retries: {last_error}",
         )
 
@@ -268,7 +345,7 @@ def process_image(client, model: str, path: Path, record_id: str) -> ImageResult
     if not records:
         return ImageResult(
             status='total_failure',
-            rows=[_empty_row(record_id, "model nije vratio podatke")],
+            rows=[_empty_row(record_id, "nema podataka")],
             reason="Model returned no records",
         )
 
@@ -279,37 +356,54 @@ def process_image(client, model: str, path: Path, record_id: str) -> ImageResult
     if all_empty:
         return ImageResult(
             status='total_failure',
-            rows=[_empty_row(record_id, "sva polja nečitka")],
+            rows=[_empty_row(record_id, "sve nečitko")],
             reason="All fields illegible",
         )
 
-    # Per-record: resolve the death-year state and build the Croatian note.
+    # Per-record: resolve the birth/death-year states and build the Croatian note.
+    birth_states = [_birth_state(rec) for rec in records]
     death_states = [_death_state(rec) for rec in records]
     rows = [
-        _record_to_row(record_id, rec, _build_note(rec, ds))
-        for rec, ds in zip(records, death_states)
+        _record_to_row(record_id, rec, _build_note(rec, bs, ds))
+        for rec, bs, ds in zip(records, birth_states, death_states)
     ]
+
+    # The model left out nearby markers it wasn't sure belong to this grave.
+    # Flag every row so the photo can be checked manually for missed people.
+    ambiguous = bool(data.get("ambiguous_multiple_markers"))
+    if ambiguous:
+        for row in rows:
+            tag = "provjeri: možda više oznaka"
+            row[NOTE_INDEX] = f"{row[NOTE_INDEX]}; {tag}" if row[NOTE_INDEX] else tag
 
     has_missing_core = any(
         any(rec.get(field) is None for field in _CORE_FIELDS)
         for rec in records
     )
-    has_uncertain_death = any(ds == "unreadable" for ds in death_states)
+    has_uncertain_year = any(s == "unreadable" for s in birth_states + death_states)
 
-    # Priority: a missing core field always wins, then an unreadable death year.
-    # A certain-absent death year needs no review -> OK, the note explains it.
+    # Priority: a missing name/surname always wins, then an unreadable birth/death
+    # year, then an ambiguous multi-marker grave. A *certain* absence of a birth or
+    # death year needs no review -> OK, the note explains it.
     if has_missing_core:
         return ImageResult(
             status='partial_success',
             rows=rows,
-            reason="One or more fields left empty due to illegibility",
+            reason="Name or surname could not be read",
         )
 
-    if has_uncertain_death:
+    if has_uncertain_year:
         return ImageResult(
             status='partial_success',
             rows=rows,
-            reason="Model not certain whether a year of death exists",
+            reason="Model not certain whether a year of birth or death exists",
+        )
+
+    if ambiguous:
+        return ImageResult(
+            status='partial_success',
+            rows=rows,
+            reason="Multiple nearby markers — verify they all belong to this grave",
         )
 
     return ImageResult(
