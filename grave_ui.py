@@ -2,6 +2,7 @@
 """TRON-GRAVE desktop UI — wraps grave_extractor.py with a Tkinter front-end."""
 
 import atexit
+import csv
 import json
 import os
 import queue
@@ -38,8 +39,17 @@ LOG_LINE_CAP = 5000
 LOG_TRIM_BATCH = 500
 DRAIN_CAP_PER_TICK = 200
 MAX_LINE_CHARS = 4096
-COST_PER_IMAGE = 0.005
 SECS_PER_IMAGE_GUESS = 4
+
+# Rough per-image cost estimate for the pre-run preview only (the live counter during
+# a run uses the real cost the extractor reports). Opus figure is a measured average
+# from real runs; the Sonnet figures are unverified estimates.
+COST_PER_IMAGE_BY_MODEL = {
+    "claude-opus-4-8":   0.025,
+    "claude-sonnet-5":   0.006,
+    "claude-sonnet-4-6": 0.005,
+}
+_DEFAULT_COST_PER_IMAGE_ESTIMATE = 0.01
 
 MODELS = ["claude-sonnet-5", "claude-opus-4-8", "claude-sonnet-4-6"]
 EFFORT_LEVELS_ALL = ["low", "medium", "high", "xhigh", "max"]
@@ -53,6 +63,7 @@ EFFORT_BY_MODEL = {
 PROGRESS_RE = re.compile(r"^\[(\d+)/(\d+)\]\s")
 RESULT_RE = re.compile(r"\b(OK|PARTIAL|FAILED)(?:\s|\()")
 DONE_RE = re.compile(r"^Done\. \d+ images processed")
+COST_RE = re.compile(r"\(total: \$([0-9.]+)\)")
 
 
 class App:
@@ -68,6 +79,7 @@ class App:
         self.model_var = tk.StringVar(value="claude-sonnet-4-6")
         self.effort_var = tk.StringVar(value="high")
         self.dry_run_var = tk.BooleanVar(value=False)
+        self.resume_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="Ready.")
         self.preview_var = tk.StringVar(value="")
         self.search_var = tk.StringVar()
@@ -79,8 +91,11 @@ class App:
         self.run_start_time: float | None = None
         self.last_total: int | None = None
         self.counters = {"ok": 0, "partial": 0, "failed": 0}
+        self.total_cost = 0.0
         self.lockfile_path: Path | None = None
         self._search_index = "1.0"
+        self._is_retry_run = False
+        self._retry_out_dir: Path | None = None
 
         self._load_settings()
         self._apply_theme()
@@ -239,6 +254,9 @@ class App:
         ttk.Checkbutton(ctrl, text="Dry run (list only)", variable=self.dry_run_var).grid(
             row=0, column=2, padx=12
         )
+        ttk.Checkbutton(
+            ctrl, text="Nastavi (preskoči obrađene)", variable=self.resume_var
+        ).grid(row=0, column=3, padx=(0, 12))
 
         self.btn_open_csv = ttk.Button(
             ctrl, text="Open output.csv",
@@ -251,7 +269,13 @@ class App:
             command=lambda: self._open_path(Path(self.output_var.get()) / "byhand"),
             state="disabled",
         )
-        self.btn_open_byhand.grid(row=0, column=6, padx=(6, 0))
+        self.btn_open_byhand.grid(row=0, column=6, padx=6)
+        self.btn_retry_byhand = ttk.Button(
+            ctrl, text="Retry byhand (Opus)",
+            command=self._on_retry_byhand,
+            state="disabled",
+        )
+        self.btn_retry_byhand.grid(row=0, column=7, padx=(6, 0))
 
         prog = ttk.Frame(self.root)
         prog.grid(row=3, column=0, sticky="ew", padx=14, pady=8)
@@ -306,6 +330,7 @@ class App:
     def _on_model_change(self, _event=None):
         self._refresh_effort_options()
         self._save_settings()
+        self._refresh_preview()
 
     # ----- folder picking + preview -----------------------------------------
 
@@ -332,6 +357,7 @@ class App:
     def _refresh_preview(self):
         self.btn_open_csv.configure(state="disabled")
         self.btn_open_byhand.configure(state="disabled")
+        self._refresh_retry_button()
         in_path = self.input_var.get()
         if not in_path:
             self.preview_var.set("")
@@ -349,10 +375,25 @@ class App:
             self.preview_var.set("Found 0 supported images (.jpg/.jpeg/.png/.webp).")
             return
         est_min = max(1, round(count * SECS_PER_IMAGE_GUESS / 60))
-        est_cost = count * COST_PER_IMAGE
+        cost_per_image = COST_PER_IMAGE_BY_MODEL.get(
+            self.model_var.get(), _DEFAULT_COST_PER_IMAGE_ESTIMATE
+        )
+        est_cost = count * cost_per_image
         self.preview_var.set(
             f"Found {count} images.  Approx. ~{est_min} min, ~${est_cost:.2f} in API cost."
         )
+
+    def _refresh_retry_button(self):
+        """Ground-truth check: enable Retry byhand only if byhand/ actually has images."""
+        out = self.output_var.get()
+        if not out:
+            self.btn_retry_byhand.configure(state="disabled")
+            return
+        byhand = Path(out) / "byhand"
+        has_images = byhand.is_dir() and any(
+            f.is_file() and is_supported_image(f) for f in byhand.iterdir()
+        )
+        self.btn_retry_byhand.configure(state="normal" if has_images else "disabled")
 
     # ----- start / stop / lifecycle -----------------------------------------
 
@@ -406,7 +447,7 @@ class App:
             return
         self.lockfile_path = lock
 
-        if not self.dry_run_var.get():
+        if not self.dry_run_var.get() and not self.resume_var.get():
             existing = out_dir / "output.csv"
             if existing.exists():
                 rows = self._csv_row_count(existing)
@@ -441,7 +482,14 @@ class App:
         ]
         if self.dry_run_var.get():
             cmd.append("--dry-run")
+        if self.resume_var.get():
+            cmd.append("--resume")
 
+        self._is_retry_run = False
+        self._retry_out_dir = None
+        self._launch_subprocess(cmd)
+
+    def _launch_subprocess(self, cmd: list[str]):
         env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
 
         if sys.platform == "win32":
@@ -561,6 +609,13 @@ class App:
         if len(line) > MAX_LINE_CHARS:
             line = line[:MAX_LINE_CHARS] + "…[truncated]\n"
 
+        cm = COST_RE.search(line)
+        if cm:
+            try:
+                self.total_cost = float(cm.group(1))
+            except ValueError:
+                pass
+
         m = PROGRESS_RE.match(line)
         if m:
             done = int(m.group(1))
@@ -600,7 +655,8 @@ class App:
             remaining = (total - done) * (elapsed / done)
             eta_str = f" — ETA {self._fmt_duration(remaining)}"
         self.status_var.set(
-            f"{done}/{total} — {ok} OK · {partial} manual · {failed} failed{eta_str}"
+            f"{done}/{total} — {ok} OK · {partial} manual · {failed} failed"
+            f" · potrošeno: ${self.total_cost:.2f}{eta_str}"
         )
 
     @staticmethod
@@ -639,8 +695,9 @@ class App:
         if self.last_total:
             self.progress.configure(mode="determinate", value=self.last_total)
 
-        out_path = self.output_var.get()
-        is_dry = self.dry_run_var.get()
+        is_retry = self._is_retry_run
+        out_dir = self._retry_out_dir if is_retry else Path(self.output_var.get())
+        is_dry = False if is_retry else self.dry_run_var.get()
         was_stopped = (rc == 130 or rc < 0)
 
         self._set_running(False)
@@ -665,13 +722,18 @@ class App:
                 self.status_var.set("Dry run complete.")
             else:
                 self.status_var.set(
-                    f"Done — {ok} OK · {partial} manual · {failed} failed."
+                    f"Done — {ok} OK · {partial} manual · {failed} failed · ${self.total_cost:.2f}"
                 )
-                if (Path(out_path) / "output.csv").exists():
-                    self.btn_open_csv.configure(state="normal")
-                if (Path(out_path) / "byhand").is_dir():
-                    self.btn_open_byhand.configure(state="normal")
-                self._notify_done()
+                if is_retry:
+                    self._notify_done()
+                    self._show_summary_popup(out_dir / "output.csv", title="Retry sažetak (Opus)")
+                else:
+                    if (out_dir / "output.csv").exists():
+                        self.btn_open_csv.configure(state="normal")
+                    if (out_dir / "byhand").is_dir():
+                        self.btn_open_byhand.configure(state="normal")
+                    self._notify_done()
+                    self._show_summary_popup(out_dir / "output.csv", title="Sažetak obrade")
         else:
             self.status_var.set(f"Failed (exit code {rc}).")
             self._append_log(f"\n[failed, exit code {rc}]\n", "stderr")
@@ -682,6 +744,124 @@ class App:
 
         self.proc = None
         self.pgid = None
+        self._is_retry_run = False
+        self._retry_out_dir = None
+        self._refresh_retry_button()
+
+    def _show_summary_popup(self, csv_path: Path, title: str = "Sažetak obrade"):
+        ok = self.counters["ok"]
+        partial = self.counters["partial"]
+        failed = self.counters["failed"]
+        total = ok + partial + failed
+        reasons = self._tally_notes(csv_path)
+
+        win = tk.Toplevel(self.root)
+        win.title(title)
+        win.configure(background=self._bg)
+        win.transient(self.root)
+        win.resizable(False, False)
+
+        frm = ttk.Frame(win, padding=16)
+        frm.grid(row=0, column=0, sticky="nsew")
+
+        ttk.Label(frm, text=title, font=("Segoe UI Semibold", 13)).grid(
+            row=0, column=0, sticky="w", pady=(0, 10)
+        )
+        ttk.Label(
+            frm,
+            text=f"Ukupno: {total}   ·   OK: {ok}   ·   Ručni pregled: {partial}   ·   Neuspjelo: {failed}",
+        ).grid(row=1, column=0, sticky="w")
+        ttk.Label(frm, text=f"Ukupni trošak: ${self.total_cost:.2f}").grid(
+            row=2, column=0, sticky="w", pady=(2, 10)
+        )
+
+        row = 3
+        if reasons:
+            ttk.Label(
+                frm, text="Najčešći razlozi za pregled:", font=("Segoe UI Semibold", 10)
+            ).grid(row=row, column=0, sticky="w")
+            row += 1
+            for reason, count in reasons:
+                ttk.Label(frm, text=f"  {count}×  {reason}", foreground="#9aa0a6").grid(
+                    row=row, column=0, sticky="w"
+                )
+                row += 1
+
+        ttk.Button(frm, text="Zatvori", command=win.destroy).grid(
+            row=row, column=0, sticky="e", pady=(14, 0)
+        )
+        win.grab_set()
+
+    @staticmethod
+    def _tally_notes(csv_path: Path, limit: int = 5) -> list[tuple[str, int]]:
+        """Top N distinct note fragments from the Notes column, for the summary popup."""
+        counts: dict[str, int] = {}
+        try:
+            with csv_path.open(encoding="utf-8-sig", newline="") as f:
+                reader = csv.reader(f)
+                next(reader, None)  # header
+                for row in reader:
+                    if len(row) < 6 or not row[5]:
+                        continue
+                    for part in row[5].split("; "):
+                        part = part.strip()
+                        if part:
+                            counts[part] = counts.get(part, 0) + 1
+        except OSError:
+            return []
+        return sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:limit]
+
+    def _on_retry_byhand(self):
+        out_dir = Path(self.output_var.get())
+        byhand_dir = out_dir / "byhand"
+        n = 0
+        if byhand_dir.is_dir():
+            n = sum(1 for f in byhand_dir.iterdir() if f.is_file() and is_supported_image(f))
+        if n == 0:
+            messagebox.showinfo("Nema slika", "Nema slika u byhand/ za ponovnu obradu.")
+            return
+
+        retry_out = out_dir / "byhand_retry"
+        if not messagebox.askyesno(
+            "Retry s Opusom",
+            f"Ponovno obraditi {n} slika iz byhand/ modelom Claude Opus 4.8?\n\n"
+            "Ovo šalje nove, plaćene API pozive.\n"
+            f"Rezultati idu u zaseban folder: {retry_out}",
+        ):
+            return
+
+        api_key = self.api_key_var.get().strip()
+        if not api_key:
+            load_dotenv(PROJECT_DIR / ".env", override=False)
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if not api_key:
+            messagebox.showerror(
+                "Missing API key",
+                "Enter your Anthropic API key in the 'API Key' field above, then click Save.",
+            )
+            return
+        os.environ["ANTHROPIC_API_KEY"] = api_key
+
+        try:
+            retry_out.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            messagebox.showerror("Cannot create output", str(e))
+            return
+
+        self._reset_run_state()
+        self._set_running(True)
+        self._is_retry_run = True
+        self._retry_out_dir = retry_out
+
+        cmd = [
+            *_EXTRACTOR_CMD,
+            "--input", str(byhand_dir),
+            "--output", str(retry_out),
+            "--verbose",
+            "--model", "claude-opus-4-8",
+            "--effort", "high",
+        ]
+        self._launch_subprocess(cmd)
 
     def _on_close(self):
         if self.proc and self.proc.poll() is None:
@@ -728,6 +908,7 @@ class App:
             self.btn_out.configure(state="disabled")
             self.btn_open_csv.configure(state="disabled")
             self.btn_open_byhand.configure(state="disabled")
+            self.btn_retry_byhand.configure(state="disabled")
             self.model_combo.configure(state="disabled")
             self.effort_combo.configure(state="disabled")
             self.status_var.set("Starting…")
@@ -741,6 +922,7 @@ class App:
 
     def _reset_run_state(self):
         self.counters = {"ok": 0, "partial": 0, "failed": 0}
+        self.total_cost = 0.0
         self.last_total = None
         self.run_start_time = None
         self.progress.configure(mode="determinate", value=0, maximum=100)

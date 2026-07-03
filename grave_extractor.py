@@ -10,7 +10,7 @@ from pathlib import Path
 import anthropic
 from dotenv import load_dotenv
 
-from extractor.csv_writer import append_rows, init_csv
+from extractor.csv_writer import append_rows, init_csv, read_processed_ids
 from extractor.file_utils import copy_to_byhand, extract_id, is_supported_image
 from extractor.image_processor import NOTE_INDEX, process_image
 
@@ -31,6 +31,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--effort", default=None,
                         choices=["low", "medium", "high", "xhigh", "max"],
                         help="Reasoning/effort level (output_config.effort). Omit for the model default (high).")
+    parser.add_argument("--resume", action="store_true",
+                        help="Skip images whose ID is already in output.csv and append instead of overwriting")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print images that would be processed and exit")
     parser.add_argument("--verbose", action="store_true",
@@ -82,10 +84,19 @@ def main() -> int:
     output_csv = output_dir / "output.csv"
     byhand_dir = output_dir / "byhand"
 
-    try:
-        init_csv(output_csv)
-    except OSError as e:
-        fatal(f"Cannot write to {output_csv}: {e}")
+    resuming = args.resume and output_csv.exists()
+    if resuming:
+        processed_ids = read_processed_ids(output_csv)
+        before = len(images)
+        images = [img for img in images if extract_id(img)[0] not in processed_ids]
+        skipped = before - len(images)
+        if skipped and args.verbose:
+            print(f"Resume: skipping {skipped} already-processed image(s).")
+    else:
+        try:
+            init_csv(output_csv)
+        except OSError as e:
+            fatal(f"Cannot write to {output_csv}: {e}")
 
     client = anthropic.Anthropic(api_key=api_key)
 
@@ -96,6 +107,7 @@ def main() -> int:
     byhand_count = 0
     had_any_issue = False
     first_api_call_done = False
+    total_cost = 0.0
 
     for idx, img in enumerate(images, start=1):
         record_id, matched = extract_id(img)
@@ -104,6 +116,8 @@ def main() -> int:
             print(f"[{idx}/{total}] Processing {img.name} ... ", end="", flush=True)
 
         result = process_image(client, model, img, record_id, args.effort)
+        total_cost += result.cost
+        cost_suffix = f" — ${result.cost:.4f} (total: ${total_cost:.2f})" if result.cost else ""
 
         if result.fatal_api_error and not first_api_call_done:
             if args.verbose:
@@ -126,23 +140,24 @@ def main() -> int:
             succeeded += 1
             if args.verbose:
                 n = len(result.rows)
-                print(f"OK ({n} record{'s' if n != 1 else ''})")
+                print(f"OK ({n} record{'s' if n != 1 else ''}){cost_suffix}")
         elif result.status == "partial_success":
             copy_to_byhand(img, byhand_dir)
             byhand_count += 1
             partial += 1
             had_any_issue = True
             if args.verbose:
-                print(f"PARTIAL ({result.reason})")
+                print(f"PARTIAL ({result.reason}){cost_suffix}")
         else:
             copy_to_byhand(img, byhand_dir)
             byhand_count += 1
             failed += 1
             had_any_issue = True
             if args.verbose:
-                print(f"FAILED ({result.reason})")
+                print(f"FAILED ({result.reason}){cost_suffix}")
 
     print(f"Done. {total} images processed. {succeeded} succeeded, {partial} partial, {failed} failed.")
+    print(f"Total cost: ${total_cost:.2f}")
     print(f"Output:  {output_csv}")
     if byhand_count > 0:
         print(f"Review:  {byhand_dir}/ ({byhand_count} images)")

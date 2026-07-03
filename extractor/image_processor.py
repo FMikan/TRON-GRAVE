@@ -128,6 +128,30 @@ _EXTRACT_TOOL = {
 # this silently has no effect and no extra cost -- see shared/prompt-caching.md.
 _SYSTEM_BLOCKS = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
 
+# USD per million tokens: (input, output). Cache write = input_rate*1.25, cache read = input_rate*0.1.
+MODEL_PRICING = {
+    "claude-sonnet-5":   (3.00, 15.00),
+    "claude-sonnet-4-6": (3.00, 15.00),
+    "claude-opus-4-8":   (5.00, 25.00),
+}
+_DEFAULT_PRICING = (3.00, 15.00)
+
+
+def _compute_cost(model: str, usage) -> float:
+    """Real USD cost of one API call, from the response's actual token usage."""
+    input_rate, output_rate = MODEL_PRICING.get(model, _DEFAULT_PRICING)
+    base_in = getattr(usage, "input_tokens", 0) or 0
+    cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
+    cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+    out = getattr(usage, "output_tokens", 0) or 0
+    return (
+        base_in * input_rate
+        + cache_write * input_rate * 1.25
+        + cache_read * input_rate * 0.1
+        + out * output_rate
+    ) / 1_000_000
+
+
 _RETRY_DELAYS = [2, 4, 8]
 _RECORD_FIELDS = ('name', 'surname', 'birth_year', 'death_year')
 # Only a missing name/surname forces manual review; birth/death years get a
@@ -146,6 +170,7 @@ class ImageResult:
     rows: list[list]
     reason: str | None
     fatal_api_error: bool = False
+    cost: float = 0.0
 
 
 def _empty_row(record_id: str, note: str = "") -> list:
@@ -331,6 +356,10 @@ def process_image(client, model: str, path: Path, record_id: str,
             reason=f"API call failed after retries: {last_error}",
         )
 
+    # A response was received, so this call is billed regardless of how well the
+    # model extracted the data -- attach the real cost to every return from here on.
+    cost = _compute_cost(model, response.usage)
+
     data = response.content[0].input
     records = data.get("records", [])
     error = data.get("error")
@@ -340,6 +369,7 @@ def process_image(client, model: str, path: Path, record_id: str,
             status='total_failure',
             rows=[_empty_row(record_id, (error or "").strip()[:_MAX_NOTE_CHARS])],
             reason=error,
+            cost=cost,
         )
 
     if not records:
@@ -347,6 +377,7 @@ def process_image(client, model: str, path: Path, record_id: str,
             status='total_failure',
             rows=[_empty_row(record_id, "nema podataka")],
             reason="Model returned no records",
+            cost=cost,
         )
 
     all_empty = all(
@@ -358,6 +389,7 @@ def process_image(client, model: str, path: Path, record_id: str,
             status='total_failure',
             rows=[_empty_row(record_id, "sve nečitko")],
             reason="All fields illegible",
+            cost=cost,
         )
 
     # Per-record: resolve the birth/death-year states and build the Croatian note.
@@ -390,6 +422,7 @@ def process_image(client, model: str, path: Path, record_id: str,
             status='partial_success',
             rows=rows,
             reason="Name or surname could not be read",
+            cost=cost,
         )
 
     if has_uncertain_year:
@@ -397,6 +430,7 @@ def process_image(client, model: str, path: Path, record_id: str,
             status='partial_success',
             rows=rows,
             reason="Model not certain whether a year of birth or death exists",
+            cost=cost,
         )
 
     if ambiguous:
@@ -404,10 +438,12 @@ def process_image(client, model: str, path: Path, record_id: str,
             status='partial_success',
             rows=rows,
             reason="Multiple nearby markers — verify they all belong to this grave",
+            cost=cost,
         )
 
     return ImageResult(
         status='full_success',
         rows=rows,
         reason=None,
+        cost=cost,
     )

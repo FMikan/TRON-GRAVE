@@ -22,7 +22,10 @@ Designed for digitizing Croatian cemetery records, with full support for Croatia
 - **Smart image compression** — auto-resizes oversized images to fit API requirements
 - **Manual review queue** — copies images needing review to a `byhand/` folder for manual inspection
 - **Notes column** — every edge case (uncertain year, missing field, non-standard filename) is explained inline in the CSV's `Notes` column
-- **Real-time progress** — GUI shows progress bar, ETA, and running API cost estimate
+- **Real-time progress & live cost counter** — GUI shows progress bar, ETA, and the *real* running API cost (computed from each response's actual token usage, not an estimate)
+- **End-of-run summary** — a popup with OK/manual/failed counts, the most common review reasons, and total cost, shown as soon as a run finishes
+- **Resume interrupted runs** — check "Nastavi (preskoči obrađene)" to skip images already in `output.csv` and append only the new ones, instead of reprocessing (and re-paying for) everything
+- **Retry byhand with Opus** — after a run finishes, a button lets you re-run just the `byhand/` images through Opus 4.8 at high effort into a separate `byhand_retry/` folder, without touching the original `output.csv`
 - **Automatic retries** — retries failed API calls with exponential backoff
 - **Settings persistence** — remembers your folders, API key, and chosen model between sessions
 - **Dry-run mode** — preview image discovery without making any API calls
@@ -85,11 +88,17 @@ TRON-GRAVE uses the **Anthropic Claude API** to analyze tombstone images. You ne
 4. Click **Create Key**, give it a name, and copy the key
 5. Paste the key into TRON-GRAVE when prompted (GUI) or into your `.env` file (CLI)
 
-**Estimated cost:** roughly **$0.005 per image** (~$5 per 1,000 photos) on the default
-**Claude Sonnet 4.6** model. Alternatives from the model dropdown (GUI) or `--model` (CLI):
+**Estimated cost per image** (pre-run preview shown in the GUI):
 
-- **Claude Sonnet 5** (`claude-sonnet-5`) — newest Sonnet, stronger on hard/worn stones (~$3/$15 per MTok; intro $2/$10 until Aug 31 2026)
-- **Claude Opus 4.8** (`claude-opus-4-8`) — top-tier, costs several times more per image
+| Model | Est. cost/image | Basis |
+|---|---|---|
+| Claude Sonnet 4.6 (`claude-sonnet-4-6`) | ~$0.005 | estimate |
+| Claude Sonnet 5 (`claude-sonnet-5`) | ~$0.006 | estimate; ~$3/$15 per MTok, intro $2/$10 until Aug 31 2026 |
+| Claude Opus 4.8 (`claude-opus-4-8`) | ~$0.025 | **measured average from real runs** |
+
+These are only for the *before-you-start* estimate. Once a run is going, the status bar and the
+end-of-run summary show the **real** cost, computed from each API response's actual token usage
+(including prompt-cache discounts) — not an estimate.
 
 Higher **effort** levels (`high` → `max`, and `xhigh` on Sonnet 5 / Opus) make the model reason
 harder per image at higher token cost; drop to `low`/`medium` for cheaper, faster runs.
@@ -206,17 +215,41 @@ Options:
                      Common values: claude-sonnet-5, claude-sonnet-4-6, claude-opus-4-8
   --effort  LEVEL    Reasoning effort: low | medium | high | xhigh | max (default: model's own).
                      Note: xhigh is not supported on Sonnet 4.6.
+  --resume           Skip images whose ID is already in output.csv; append instead of overwriting
   --verbose          Show detailed per-image progress
   --dry-run          List discovered images without making any API calls
 ```
 
 The model can also be set with the `CLAUDE_MODEL` environment variable; the `--model` flag takes precedence.
 
+Verbose per-image lines include the real cost of that call and the running total, e.g.:
+```
+[12/300] Processing img012.jpg ... OK (1 record) — $0.0184 (total: $2.35)
+```
+and the final line before exit reports the run's total: `Total cost: $2.35`.
+
 **Exit codes:**
 - `0` — All images processed successfully
 - `2` — Partial success (some images failed or had missing fields)
 - `1` — Fatal error (likely invalid API key)
 - `130` — Interrupted by user (Ctrl+C)
+
+---
+
+## Resuming & Retrying
+
+**Resume an interrupted run.** If a run is stopped (Ctrl+C, the GUI's Stop button, or a crash),
+check **"Nastavi (preskoči obrađene)"** in the GUI (or pass `--resume` on the CLI) before starting
+again on the same output folder. Every processed image already has a row in `output.csv` — resume
+reads that file, skips any image whose ID is already there, and appends only the new ones instead
+of overwriting the file. This also means you don't get asked the "output.csv exists" backup/overwrite
+question, and you don't pay to reprocess images you've already paid for once.
+
+**Retry hard images with a stronger model.** Once a run finishes, if `byhand/` has any images, the
+**"Retry byhand (Opus)"** button becomes available. Clicking it re-runs just those images through
+Claude Opus 4.8 at `high` effort, writing results into a separate `byhand_retry/` subfolder (its own
+`output.csv` and, if anything is still unreadable, its own `byhand/`) — the original `output.csv` and
+`byhand/` are left untouched, so you can compare the two runs or merge the improved rows in by hand.
 
 ---
 
