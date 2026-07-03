@@ -16,6 +16,11 @@ MAX_IMAGE_BYTES = 3_750_000
 
 SYSTEM_PROMPT = """You are a genealogical data extraction assistant. You will be shown a photograph of a tombstone.
 
+Before anything else, fill in "raw_text": transcribe verbatim everything legible on every marker that
+belongs to this grave — names, years, and any other inscribed text — exactly as carved. Do this
+transcription first and use it as your working reference for every field below; do not decide a name,
+surname, or year status until you have transcribed the relevant text.
+
 Your task:
 1. The grave in the foreground may consist of MULTIPLE markers placed together — several plaques,
    headstones and/or crosses. Read and extract EVERY person from ALL markers that belong to this
@@ -88,6 +93,15 @@ _EXTRACT_TOOL = {
     "input_schema": {
         "type": "object",
         "properties": {
+            # Internal scratchpad only: forces the model to read the whole stone before
+            # classifying, which improves the structured fields. Not written to the CSV.
+            "raw_text": {
+                "type": "string",
+                "description": "Verbatim transcription of everything legible on every marker belonging "
+                                "to this grave, written before any other field. This is your working "
+                                "transcript — read carefully first, then extract the structured fields "
+                                "below from it.",
+            },
             "records": {
                 "type": "array",
                 "items": {
@@ -119,7 +133,7 @@ _EXTRACT_TOOL = {
                                "could not be included confidently (needs manual review); else false.",
             },
         },
-        "required": ["records", "error", "ambiguous_multiple_markers"],
+        "required": ["raw_text", "records", "error", "ambiguous_multiple_markers"],
     },
 }
 
