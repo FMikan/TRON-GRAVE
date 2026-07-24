@@ -16,10 +16,17 @@ MAX_IMAGE_BYTES = 3_750_000
 
 SYSTEM_PROMPT = """You are a genealogical data extraction assistant. You will be shown a photograph of a tombstone.
 
-Before anything else, fill in "raw_text": transcribe verbatim everything legible on every marker that
-belongs to this grave — names, years, and any other inscribed text — exactly as carved. Do this
-transcription first and use it as your working reference for every field below; do not decide a name,
-surname, or year status until you have transcribed the relevant text.
+Work in this exact order, filling BOTH scratchpad fields before any structured field:
+1. "raw_text": transcribe verbatim everything legible on every marker that belongs to this grave —
+   names, years, and any other inscribed text — exactly as carved.
+2. "reasoning": think, in words, about what the transcription means before you commit to any value.
+   This is where you work out the hard cases: which markers form one grave; how to reduce each name
+   to the pure first name and surname (dropping titles like "dr." and maiden names like "r. Kovač");
+   how to convert names from an oblique case back to the nominative ("Vječni dom Mare i Pave" → Mara,
+   Pavo); and any year you can derive with HIGH confidence (a birth year from a death year plus an age
+   at death, or a worn digit resolved by a spouse's clearly-legible year). State your conclusion for
+   each person here. Do NOT decide a name, surname, or year status until you have reasoned it through.
+Then fill the structured fields below from your reasoning.
 
 Your task:
 1. The grave in the foreground may consist of MULTIPLE markers placed together — several plaques,
@@ -32,32 +39,59 @@ Your task:
    plot separated by a gap or path.
 3. If it is genuinely unclear whether nearby markers belong to this grave or to a separate
    neighbouring grave, be CONSERVATIVE: do NOT include the uncertain markers, and set
-   "ambiguous_multiple_markers" to true so the photo is flagged for manual review. Otherwise set it
-   to false.
-4. Extract the following fields for each person commemorated on this grave:
-   - First name (Name)
-   - Family name (Surname)
+   "ambiguous_multiple_markers" to true so the grave is flagged in the output notes. Otherwise set
+   it to false.
+4. Extract these four pure values for each person commemorated on this grave — nothing more:
+   - First name (Name) — the given name ONLY. Strip every title or honorific (e.g. "dr.", "prof.",
+     "mr. sc.", "ing.", "akad.", "vlč.", "fra", "don", "gđa"); a title is never part of the name.
+   - Family name (Surname) — the person's OWN family name only. If a maiden/birth name is also given
+     (Croatian "r." or "rođ." = née, e.g. "HORVAT r. KOVAČ"), keep ONLY the primary carved surname
+     ("Horvat") and DROP the maiden name together with the "r."/"rođ." marker.
    - Year of birth (4-digit year only)
    - Year of death (4-digit year only)
+   Give the name and surname in their base NOMINATIVE (dictionary) form. Croatian dedications often
+   inscribe names in an oblique case — most commonly the genitive after possessive phrases such as
+   "Vječni dom …", "Grob …", "Počivalište …" or "U spomen …" — so convert them back to nominative:
+   "Vječni dom Mare i Pave" commemorates Mara and Pavo, and "Vječni dom Ivana Horvata" is Ivan
+   Horvat. Normalise only when the construction makes the case clear; if you are unsure whether a
+   form is already nominative, keep it as carved.
 5. Return one record per person (a grave with several people yields several records).
-6. If you are not 100% certain about name or surname, set that field to null. Do NOT guess or estimate.
+6. Accuracy over completeness — NEVER guess. If you are not highly confident about a name or surname,
+   set it to null rather than invent one. You MAY INFER a value the stone does not state outright when
+   the transcription lets you conclude it with HIGH confidence — reasoning, not guessing. The clearest
+   case is arithmetic: if a death year and an age at death are inscribed but the birth year is not,
+   compute it (e.g. "umrla 1987. u 48. godini" → rođ. ~1939); likewise derive a missing death year
+   from a birth year plus a stated age. Croatian "u N. godini (života)" = the N-th year of life (N−1
+   completed years), so a computed year may be off by ±1 — acceptable, because it is tagged as
+   inferred (see below). Only commit an inferred value when you are confident it is essentially
+   correct; otherwise leave the field absent/unreadable.
 7. For the year of birth you MUST set "birth_year_status" for each person:
-   - "present": a birth year is clearly legible. Put the 4-digit year in birth_year.
-   - "absent_certain": you are 100% certain NO birth year is inscribed. Use this ONLY with concrete
-     visual evidence — for example only a death year is shown, or the marker records no birth date.
-     Set birth_year to null.
-   - "unreadable": a birth year may be present but you cannot read it confidently (worn, obscured,
-     partially hidden, ambiguous). Set birth_year to null.
-   When in ANY doubt, choose "unreadable" rather than "absent_certain".
+   - "present": a full 4-digit birth year is clearly legible. Put the 4-digit year in birth_year.
+   - "inferred": the birth year is NOT inscribed, but you derived it with HIGH confidence from other
+     inscribed facts (e.g. death year minus age at death). Put the computed 4-digit year in
+     birth_year. Use only when confident; if unsure, do not infer.
+   - "absent_certain": no birth year to record. Use this when you are 100% certain none is
+     inscribed (for example only a death year is shown, or the marker records no birth date), OR
+     when a year is INCOMPLETE — fewer than four digits are legible (e.g. only "19" or "20"). An
+     incomplete year is treated as missing, not as something to re-read: set birth_year to null.
+   - "unreadable": a full year is clearly present (four digit positions) but you cannot read the
+     digits confidently (worn, obscured, partially hidden, ambiguous). Set birth_year to null.
+   When in ANY doubt, choose "unreadable" rather than "absent_certain" — EXCEPT that an incomplete
+   year (fewer than four legible digits, such as "20") is ALWAYS "absent_certain", never "unreadable".
 8. For the year of death you MUST set "death_year_status" for each person:
-   - "present": a death year is clearly legible. Put the 4-digit year in death_year.
-   - "absent_certain": you are 100% certain NO death year exists. Use this ONLY with concrete
-     visual evidence — for example only a birth year is inscribed, or a dash / blank space follows
-     the birth year ("1950 -", "1950 - 20"), indicating the person is most likely still alive.
-     Set death_year to null.
-   - "unreadable": a death year may be present but you cannot read it confidently (worn, obscured,
-     partially hidden, ambiguous). Set death_year to null.
-   When in ANY doubt, choose "unreadable" rather than "absent_certain".
+   - "present": a full 4-digit death year is clearly legible. Put the 4-digit year in death_year.
+   - "inferred": the death year is NOT inscribed, but you derived it with HIGH confidence from other
+     inscribed facts (e.g. birth year plus a stated age at death). Put the computed 4-digit year in
+     death_year. Use only when confident; if unsure, do not infer.
+   - "absent_certain": no death year to record. Use this when you are 100% certain none exists (for
+     example only a birth year is inscribed, or a dash / blank space follows the birth year, e.g.
+     "1950 -", indicating the person is most likely still alive), OR when a year is INCOMPLETE —
+     fewer than four digits are legible, e.g. "1950 - 20". An incomplete year is treated as missing,
+     not as something to re-read: set death_year to null.
+   - "unreadable": a full year is clearly present (four digit positions) but you cannot read the
+     digits confidently (worn, obscured, partially hidden, ambiguous). Set death_year to null.
+   When in ANY doubt, choose "unreadable" rather than "absent_certain" — EXCEPT that an incomplete
+   year (fewer than four legible digits, such as "20") is ALWAYS "absent_certain", never "unreadable".
 9. "note": usually null. Only for a genuine edge case, a Croatian note of at most ~6 words
    (e.g. "osoba živa", "prezime nečitko"). Keep it as short as possible.
 10. If the image is completely unreadable, set records to [] and explain why in the error field in
@@ -70,8 +104,10 @@ Worked examples:
   death_year_status="present" (2010).
 - "MARIJA HORVAT 1955 –" (a dash with nothing after it): birth_year_status="present" (1955),
   death_year_status="absent_certain" — the dash is concrete evidence of no death year yet.
-- "1950 – 20" (second date cut off or worn to two digits): death_year_status="unreadable" —
-  a year was clearly started but cannot be confirmed, so treat it as unreadable, not absent.
+- "1950 – 20" (second date cut off or worn to two digits — an INCOMPLETE year):
+  birth_year_status="present" (1950), death_year_status="absent_certain" — fewer than four digits
+  are legible, so the death year is treated as missing. Do NOT mark it "unreadable"; an incomplete
+  year must not be sent for manual review.
 - Only a birth year is carved, with no dash and no visible space left for a second date:
   birth_year_status="present", death_year_status="absent_certain".
 - A worn, chipped corner obscures what would be the birth year, but the death year is crisp:
@@ -80,9 +116,21 @@ Worked examples:
   SAME grave — extract one record per cross.
 - A second, unrelated headstone is visible, blurred, in the background: ignore it entirely — it is
   a separate grave, not part of this one.
-- A plaque commemorates "IVAN HORVAT 1920–1999" and "MARIJA HORVAT r. KOVAČ 1925–2015" on the same
-  stone: two people, two records, same surname family — this is one grave with two people, not two
-  graves.
+- A plaque commemorates "IVAN HORVAT 1920–1999" and "dr. MARIJA HORVAT r. KOVAČ 1925–2015" on the
+  same stone: two people, two records, one grave (not two). Record Marija's surname as just "Horvat"
+  — DROP the maiden name "r. Kovač" and the title "dr."; names carry no titles or maiden names.
+- "VJEČNI DOM MARE I PAVE" (a possessive dedication with the names in the genitive): the two people
+  are Mara and Pavo — convert the genitive "Mare"/"Pave" back to the nominative "Mara"/"Pavo".
+  Likewise "Vječni dom Ivana Horvata" → name "Ivan", surname "Horvat" (nominative), not "Ivana"/"Horvata".
+- "MARIJA HORVAT umrla 1987. u 48. godini", no birth year carved: death_year_status="present" (1987),
+  and birth_year_status="inferred" with birth_year ~1939 (1987 minus 48). Had the age been missing or
+  unclear, do NOT infer — leave the birth year absent/unreadable.
+- Two spouses share one grave: "IVAN HORVAT 1936–2001" (crisp) and "MARIJA HORVAT 19?8–2010", where
+  the tens digit of Marija's birth year is worn and its faint strokes fit either "3" or "4". Spouses
+  are usually born within a few years of each other, so "1938" (2 years from Ivan) is far more likely
+  than "1948" (12 years) — read Marija's birth year as 1938 with birth_year_status="inferred". Use
+  spouse proximity ONLY to choose between digit readings a partly-legible year already allows; NEVER
+  to invent a year that is fully illegible (that stays "unreadable").
 - Text is carved in Cyrillic, e.g. "ХОРВАТ" for the surname: transliterate to Croatian Latin script
   as "Horvat" before writing the output field; do not leave any field in Cyrillic characters."""
 
@@ -102,6 +150,18 @@ _EXTRACT_TOOL = {
                                 "transcript — read carefully first, then extract the structured fields "
                                 "below from it.",
             },
+            # Internal scratchpad only (not written to the CSV): forces the model to reason through
+            # grouping, name normalisation and any inference in words before it fills `records`.
+            "reasoning": {
+                "type": "string",
+                "description": "Written after raw_text and before the structured fields, and NOT saved "
+                                "to the CSV. Reason briefly, in words, through the hard cases: which "
+                                "markers form one grave; reducing each name to the pure first name and "
+                                "surname (drop titles and maiden names); converting names to the "
+                                "nominative; and any high-confidence inferred year (age arithmetic, "
+                                "spouse proximity). Decide each person's fields here before filling "
+                                "`records`. A few focused lines, not an essay.",
+            },
             "records": {
                 "type": "array",
                 "items": {
@@ -112,14 +172,14 @@ _EXTRACT_TOOL = {
                         "birth_year": {"type": ["integer", "null"]},
                         "birth_year_status": {
                             "type": "string",
-                            "enum": ["present", "absent_certain", "unreadable"],
-                            "description": "present = legible; absent_certain = surely none (concrete evidence); unreadable = cannot read.",
+                            "enum": ["present", "inferred", "absent_certain", "unreadable"],
+                            "description": "present = legible; inferred = not inscribed but derived with high confidence (e.g. death year minus age); absent_certain = surely none; unreadable = cannot read.",
                         },
                         "death_year": {"type": ["integer", "null"]},
                         "death_year_status": {
                             "type": "string",
-                            "enum": ["present", "absent_certain", "unreadable"],
-                            "description": "present = legible; absent_certain = surely none (concrete evidence); unreadable = cannot read.",
+                            "enum": ["present", "inferred", "absent_certain", "unreadable"],
+                            "description": "present = legible; inferred = not inscribed but derived with high confidence (e.g. birth year plus age); absent_certain = surely none; unreadable = cannot read.",
                         },
                         "note": {"type": ["string", "null"]},
                     },
@@ -130,10 +190,10 @@ _EXTRACT_TOOL = {
             "ambiguous_multiple_markers": {
                 "type": "boolean",
                 "description": "true if nearby plaques/crosses might belong to this grave but "
-                               "could not be included confidently (needs manual review); else false.",
+                               "could not be included confidently (flagged in the notes); else false.",
             },
         },
-        "required": ["raw_text", "records", "error", "ambiguous_multiple_markers"],
+        "required": ["raw_text", "reasoning", "records", "error", "ambiguous_multiple_markers"],
     },
 }
 
@@ -194,12 +254,14 @@ def _empty_row(record_id: str, note: str = "") -> list:
 def _year_state(rec: dict, year_field: str, status_field: str) -> str:
     """Resolve a year's situation defensively, never trusting a lone flag.
 
-    A concrete year always wins. A null only counts as a certain absence when the
-    model explicitly says so; anything else (incl. a 'present' flag with no year)
-    falls back to 'unreadable' so the image is sent to byhand, not passed as OK.
+    A concrete year value always wins: it counts as 'inferred' when the model
+    flagged it as derived, otherwise 'present'. A null only counts as a certain
+    absence when the model explicitly says so; anything else (incl. a 'present'
+    flag with no year) falls back to 'unreadable' so the image is sent to byhand,
+    not passed as OK.
     """
     if rec.get(year_field) is not None:
-        return "present"
+        return "inferred" if rec.get(status_field) == "inferred" else "present"
     if rec.get(status_field) == "absent_certain":
         return "absent_certain"
     return "unreadable"
@@ -233,6 +295,11 @@ def _build_note(rec: dict, birth_state: str, death_state: str) -> str:
         bits.append("god. rođenja nečitka")
     if death_state == "unreadable":
         bits.append("god. smrti nečitka")
+
+    if birth_state == "inferred":
+        bits.append("god. rođ. izvedena")
+    if death_state == "inferred":
+        bits.append("god. smrti izvedena")
     base = "; ".join(bits)
 
     model_note = (rec.get("note") or "").strip()
@@ -290,7 +357,9 @@ def _call_api(client, model: str, mime: str, b64: str, effort: str | None = None
         params["output_config"] = {"effort": effort}
     return client.messages.create(
         model=model,
-        max_tokens=1024,
+        # Room for two scratchpad fields (raw_text + reasoning) plus every record on a
+        # multi-person grave; 1024 risked truncating large graves. Only generated tokens are billed.
+        max_tokens=4096,
         system=_SYSTEM_BLOCKS,
         tools=[_EXTRACT_TOOL],
         tool_choice={"type": "tool", "name": "extract_burial_records"},
@@ -429,8 +498,8 @@ def process_image(client, model: str, path: Path, record_id: str,
     has_uncertain_year = any(s == "unreadable" for s in birth_states + death_states)
 
     # Priority: a missing name/surname always wins, then an unreadable birth/death
-    # year, then an ambiguous multi-marker grave. A *certain* absence of a birth or
-    # death year needs no review -> OK, the note explains it.
+    # year. A *certain* absence of a year needs no review, and an ambiguous
+    # multi-marker grave is only flagged in the note (above) -> both pass as OK.
     if has_missing_core:
         return ImageResult(
             status='partial_success',
@@ -444,14 +513,6 @@ def process_image(client, model: str, path: Path, record_id: str,
             status='partial_success',
             rows=rows,
             reason="Model not certain whether a year of birth or death exists",
-            cost=cost,
-        )
-
-    if ambiguous:
-        return ImageResult(
-            status='partial_success',
-            rows=rows,
-            reason="Multiple nearby markers — verify they all belong to this grave",
             cost=cost,
         )
 
