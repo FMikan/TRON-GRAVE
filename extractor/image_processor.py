@@ -22,19 +22,20 @@ Work in this exact order, filling BOTH scratchpad fields before any structured f
 2. "reasoning": think, in words, about what the transcription means before you commit to any value.
    This is where you work out the hard cases: which markers form one grave; how to reduce each name
    to the pure first name and surname (dropping titles like "dr." and maiden names like "r. Kovač");
-   how to convert names from an oblique case back to the nominative ("Vječni dom Mare i Pave" → Mara,
-   Pavo); and any year you can derive with HIGH confidence (a birth year from a death year plus an age
+   how to convert names from an oblique case back to the nominative ("Vječni dom Ivana Horvata" →
+   Ivan Horvat); and any year you can derive with HIGH confidence (a birth year from a death year plus an age
    at death, or a worn digit resolved by a spouse's clearly-legible year). State your conclusion for
    each person here. Do NOT decide a name, surname, or year status until you have reasoned it through.
 Then fill the structured fields below from your reasoning.
 
 Your task:
 1. The grave in the foreground may consist of MULTIPLE markers placed together — several plaques,
-   headstones and/or crosses. Read and extract EVERY person from ALL markers that belong to this
-   one grave; do not stop at a single plaque or cross. Treat markers as the SAME grave when they
-   share any of: a common grave frame, border, curb or foundation; the same surname; close physical
-   grouping (side by side, touching, or on the same base); or the same orientation, material and
-   carving style.
+   headstones and/or crosses. Read and extract every person from the markers you have CONFIRMED
+   belong to this one grave; do not stop at a single plaque or cross. Treat markers as the SAME grave
+   ONLY when they share a physical structure — a common grave frame, border, curb, foundation or base,
+   or are directly touching. A shared surname, orientation, material or carving style is corroborating
+   evidence but is NEVER sufficient on its own: markers that share only those, with any visible gap or
+   path between them, are SEPARATE graves (a whole row of same-surname family graves is common).
 2. IGNORE graves that are clearly separate — in the background, out of focus, or in a different
    plot separated by a gap or path.
 3. If it is genuinely unclear whether nearby markers belong to this grave or to a separate
@@ -67,10 +68,12 @@ Your task:
    - Year of death (4-digit year only)
    Give the name and surname in their base NOMINATIVE (dictionary) form. Croatian dedications often
    inscribe names in an oblique case — most commonly the genitive after possessive phrases such as
-   "Vječni dom …", "Grob …", "Počivalište …" or "U spomen …" — so convert them back to nominative:
-   "Vječni dom Mare i Pave" commemorates Mara and Pavo, and "Vječni dom Ivana Horvata" is Ivan
-   Horvat. Normalise only when the construction makes the case clear; if you are unsure whether a
-   form is already nominative, keep it as carved.
+   "Vječni dom …", "Grob …", "Počivalište …" or "U spomen …" — so convert them back to nominative,
+   using the surname's own case ending to fix the case: in "Vječni dom Ivana Horvata" the surname
+   "Horvata" is genitive (nominative "Horvat"), so the whole phrase is genitive and the person is
+   Ivan Horvat, not "Ivana"/"Horvata". Normalise only when the construction makes the case clear —
+   in particular, do NOT force a bare first name whose genitive form is also a real nominative name
+   (e.g. "Mare", "Pave"); if you are unsure whether a form is already nominative, keep it as carved.
 5. Return one record per PERSON — the person is the unit, not the marker. A grave with several people
    yields several records; but if the SAME individual (same name and years) is inscribed on more than
    one marker of this grave (e.g. a photo-plaque and an engraved cross), record them ONCE, not once
@@ -83,7 +86,8 @@ Your task:
    from a birth year plus a stated age. Croatian "u N. godini (života)" = the N-th year of life (N−1
    completed years), so a computed year may be off by ±1 — acceptable, because it is tagged as
    inferred (see below). Only commit an inferred value when you are confident it is essentially
-   correct; otherwise leave the field absent/unreadable. Finally, sanity-check the pair: a birth year
+   correct; otherwise leave the year null with status "unreadable" (or "absent_certain" only if you are
+   100% sure none is inscribed). Finally, sanity-check the pair: a birth year
    must not be later than the death year (equal is allowed for an infant), and the lifespan should be
    broadly plausible — a birth after death, or an obviously impossible age, means a digit was misread,
    so re-examine it. If you still cannot make the pair consistent, set the less certain year's status
@@ -105,6 +109,8 @@ Your task:
      digits confidently (worn, obscured, partially hidden, ambiguous). Set birth_year to null.
    When in ANY doubt, choose "unreadable" rather than "absent_certain" — EXCEPT that an incomplete
    year (fewer than four digit positions, such as "20") is ALWAYS "absent_certain", never "unreadable".
+   A "present" or "inferred" status counts only if you actually put the 4-digit number in the year
+   field — a status with a null year is treated as "unreadable" and sent for manual review.
 8. For the year of death you MUST set "death_year_status" for each person:
    - "present": a full 4-digit death year is clearly legible. Put the 4-digit year in death_year.
    - "inferred": the death year is not fully legible as carved — not inscribed at all, OR inscribed
@@ -122,6 +128,8 @@ Your task:
      digits confidently (worn, obscured, partially hidden, ambiguous). Set death_year to null.
    When in ANY doubt, choose "unreadable" rather than "absent_certain" — EXCEPT that an incomplete
    year (fewer than four digit positions, such as "20") is ALWAYS "absent_certain", never "unreadable".
+   A "present" or "inferred" status counts only if you actually put the 4-digit number in the year
+   field — a status with a null year is treated as "unreadable" and sent for manual review.
 9. "note": usually null. The system already records missing name/surname and each year's status
    automatically in the same note cell (capped at 60 characters), and your note is appended after
    that — so keep it to a few words and add ONLY what those fields cannot convey (e.g. "osoba živa"
@@ -161,9 +169,11 @@ Worked examples:
   full names appear.
 - "IVAN HORVAT pok. PETRA 1930–2000": name "Ivan", surname "Horvat" — "pok. Petra" is a patronymic
   (son of the late Petar), not a surname; drop it.
-- "VJEČNI DOM MARE I PAVE" (a possessive dedication with the names in the genitive): the two people
-  are Mara and Pavo — convert the genitive "Mare"/"Pave" back to the nominative "Mara"/"Pavo".
-  Likewise "Vječni dom Ivana Horvata" → name "Ivan", surname "Horvat" (nominative), not "Ivana"/"Horvata".
+- "VJEČNI DOM IVANA HORVATA" (a possessive dedication in the genitive): the surname "Horvata" is the
+  genitive of "Horvat", which fixes the whole phrase as genitive — so the person is name "Ivan",
+  surname "Horvat", not "Ivana"/"Horvata". Do NOT convert a bare first name whose genitive doubles as
+  a real nominative name (e.g. "Mare", "Pave") unless an accompanying surname fixes the case; if it
+  does not, keep the name as carved.
 - "MARIJA HORVAT umrla 1987. u 48. godini", no birth year carved: death_year_status="present" (1987),
   and birth_year_status="inferred" with birth_year ~1939 (1987 minus 48). Had the age been missing or
   unclear, do NOT infer — leave the birth year absent/unreadable.
@@ -215,13 +225,13 @@ _EXTRACT_TOOL = {
                         "birth_year_status": {
                             "type": "string",
                             "enum": ["present", "inferred", "absent_certain", "unreadable"],
-                            "description": "present = legible; inferred = not fully legible (missing, or a worn digit) but derived with high confidence (e.g. death year minus age, or a worn digit fixed from a spouse's year); absent_certain = surely none; unreadable = cannot read at all.",
+                            "description": "present = legible; inferred = not fully legible (missing, or a worn digit) but derived with high confidence (e.g. death year minus age, or a worn digit fixed from a spouse's year); absent_certain = no full year (none inscribed, or only an incomplete short year); unreadable = cannot read at all.",
                         },
                         "death_year": {"type": ["integer", "null"]},
                         "death_year_status": {
                             "type": "string",
                             "enum": ["present", "inferred", "absent_certain", "unreadable"],
-                            "description": "present = legible; inferred = not fully legible (missing, or a worn digit) but derived with high confidence (e.g. birth year plus age, or a worn digit fixed from a spouse's year); absent_certain = surely none; unreadable = cannot read at all.",
+                            "description": "present = legible; inferred = not fully legible (missing, or a worn digit) but derived with high confidence (e.g. birth year plus age, or a worn digit fixed from a spouse's year); absent_certain = no full year (none inscribed, or only an incomplete short year); unreadable = cannot read at all.",
                         },
                         "note": {"type": ["string", "null"]},
                     },
