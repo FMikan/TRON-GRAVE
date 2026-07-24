@@ -1,5 +1,6 @@
 .env
 .venv/
+.build-venv/
 dist/
 build/
 *.spec

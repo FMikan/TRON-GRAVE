@@ -1,0 +1,2 @@
+# Windows batch scripts must use CRLF so cmd.exe handles goto/labels correctly.
+*.bat text eol=crlf
