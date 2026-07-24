@@ -41,12 +41,28 @@ Your task:
    neighbouring grave, be CONSERVATIVE: do NOT include the uncertain markers, and set
    "ambiguous_multiple_markers" to true so the grave is flagged in the output notes. Otherwise set
    it to false.
-4. Extract these four pure values for each person commemorated on this grave — nothing more:
+4. Extract these four pure values for each person BURIED in this grave — nothing more. Do NOT create
+   a record for the living: names in a mourning / dedication block (the people who erected the stone
+   or who grieve) are not buried here. Such blocks are introduced by phrases like "Ožalošćeni",
+   "Tugujući", "S ljubavlju" / "S tugom", "Uspomenu čuvaju", "Podigli / Podigla / Podigoše",
+   "Sjećaju se", and usually continue with relationship words (supruga, suprug, sinovi, kćeri,
+   unučad, obitelj) and carry NO years. Treat a name as a mourner ONLY when it sits inside such a
+   block; do NOT drop a genuinely buried person just because their year is worn off. The four values:
    - First name (Name) — the given name ONLY. Strip every title or honorific (e.g. "dr.", "prof.",
      "mr. sc.", "ing.", "akad.", "vlč.", "fra", "don", "gđa"); a title is never part of the name.
+     A compound/double given name is ONE name — keep both parts (e.g. "Ana Marija", "Josip Juraj");
+     do not drop the second part or mistake it for the surname.
    - Family name (Surname) — the person's OWN family name only. If a maiden/birth name is also given
      (Croatian "r." or "rođ." = née, e.g. "HORVAT r. KOVAČ"), keep ONLY the primary carved surname
-     ("Horvat") and DROP the maiden name together with the "r."/"rođ." marker.
+     ("Horvat") and DROP the maiden name together with the "r."/"rođ." marker. A patronymic — "pok."
+     (pokojni = the late) plus the father's name in the genitive, e.g. "IVAN HORVAT pok. PETRA" (Ivan
+     Horvat, son of the late Petar) — is NOT a surname; drop "pok. Petra" (the surname stays "Horvat").
+     A surname carved only ONCE for the whole grave — a large header across the top, or "OBITELJ …" /
+     "PORODICA …" (family of…) — is the family name of EVERY first name listed below it; assign it to
+     each such person, do NOT leave surname null (a person with a DIFFERENT surname carved beside their
+     own name keeps that one). The words "obitelj" / "porodica" are themselves NEVER a first name; a
+     stone showing only a family surname with no individual names or years yields exactly ONE record —
+     surname = that family name, name = null — do not invent a first name or return an empty list.
    - Year of birth (4-digit year only)
    - Year of death (4-digit year only)
    Give the name and surname in their base NOMINATIVE (dictionary) form. Croatian dedications often
@@ -55,7 +71,10 @@ Your task:
    "Vječni dom Mare i Pave" commemorates Mara and Pavo, and "Vječni dom Ivana Horvata" is Ivan
    Horvat. Normalise only when the construction makes the case clear; if you are unsure whether a
    form is already nominative, keep it as carved.
-5. Return one record per person (a grave with several people yields several records).
+5. Return one record per PERSON — the person is the unit, not the marker. A grave with several people
+   yields several records; but if the SAME individual (same name and years) is inscribed on more than
+   one marker of this grave (e.g. a photo-plaque and an engraved cross), record them ONCE, not once
+   per marker.
 6. Accuracy over completeness — NEVER guess. If you are not highly confident about a name or surname,
    set it to null rather than invent one. You MAY INFER a value the stone does not state outright when
    the transcription lets you conclude it with HIGH confidence — reasoning, not guessing. The clearest
@@ -64,36 +83,50 @@ Your task:
    from a birth year plus a stated age. Croatian "u N. godini (života)" = the N-th year of life (N−1
    completed years), so a computed year may be off by ±1 — acceptable, because it is tagged as
    inferred (see below). Only commit an inferred value when you are confident it is essentially
-   correct; otherwise leave the field absent/unreadable.
+   correct; otherwise leave the field absent/unreadable. Finally, sanity-check the pair: a birth year
+   must not be later than the death year (equal is allowed for an infant), and the lifespan should be
+   broadly plausible — a birth after death, or an obviously impossible age, means a digit was misread,
+   so re-examine it. If you still cannot make the pair consistent, set the less certain year's status
+   to "unreadable" (its value null, so the photo is reviewed) and add a short note "provjeri godine".
 7. For the year of birth you MUST set "birth_year_status" for each person:
    - "present": a full 4-digit birth year is clearly legible. Put the 4-digit year in birth_year.
-   - "inferred": the birth year is NOT inscribed, but you derived it with HIGH confidence from other
-     inscribed facts (e.g. death year minus age at death). Put the computed 4-digit year in
-     birth_year. Use only when confident; if unsure, do not infer.
+   - "inferred": the birth year is not fully legible as carved — not inscribed at all, OR inscribed
+     with a worn/damaged digit — but you derived it with HIGH confidence from other inscribed facts
+     (e.g. death year minus age at death, or a worn digit resolved from a spouse's clearly-legible
+     year). Put the computed 4-digit year in birth_year. Use only when confident; if unsure, do not infer.
    - "absent_certain": no birth year to record. Use this when you are 100% certain none is
      inscribed (for example only a death year is shown, or the marker records no birth date), OR
-     when a year is INCOMPLETE — fewer than four digits are legible (e.g. only "19" or "20"). An
-     incomplete year is treated as missing, not as something to re-read: set birth_year to null.
+     when a year is INCOMPLETE — fewer than four digit positions are carved or remain (the year was
+     cut off, or only one or two digits were ever there, e.g. "19" or "20"). A single worn digit in
+     an otherwise four-position year is NOT "incomplete" — that is "unreadable" (or "inferred" if you
+     can resolve it). An incomplete year is treated as missing, not as something to re-read: set
+     birth_year to null.
    - "unreadable": a full year is clearly present (four digit positions) but you cannot read the
      digits confidently (worn, obscured, partially hidden, ambiguous). Set birth_year to null.
    When in ANY doubt, choose "unreadable" rather than "absent_certain" — EXCEPT that an incomplete
-   year (fewer than four legible digits, such as "20") is ALWAYS "absent_certain", never "unreadable".
+   year (fewer than four digit positions, such as "20") is ALWAYS "absent_certain", never "unreadable".
 8. For the year of death you MUST set "death_year_status" for each person:
    - "present": a full 4-digit death year is clearly legible. Put the 4-digit year in death_year.
-   - "inferred": the death year is NOT inscribed, but you derived it with HIGH confidence from other
-     inscribed facts (e.g. birth year plus a stated age at death). Put the computed 4-digit year in
-     death_year. Use only when confident; if unsure, do not infer.
+   - "inferred": the death year is not fully legible as carved — not inscribed at all, OR inscribed
+     with a worn/damaged digit — but you derived it with HIGH confidence from other inscribed facts
+     (e.g. birth year plus a stated age at death, or a worn digit resolved from a spouse's year). Put
+     the computed 4-digit year in death_year. Use only when confident; if unsure, do not infer.
    - "absent_certain": no death year to record. Use this when you are 100% certain none exists (for
      example only a birth year is inscribed, or a dash / blank space follows the birth year, e.g.
      "1950 -", indicating the person is most likely still alive), OR when a year is INCOMPLETE —
-     fewer than four digits are legible, e.g. "1950 - 20". An incomplete year is treated as missing,
+     fewer than four digit positions are carved or remain, e.g. "1950 - 20" (a dash then a cut-off
+     second date). A single worn digit in an otherwise four-position year is NOT "incomplete" — that
+     is "unreadable" (or "inferred" if you can resolve it). An incomplete year is treated as missing,
      not as something to re-read: set death_year to null.
    - "unreadable": a full year is clearly present (four digit positions) but you cannot read the
      digits confidently (worn, obscured, partially hidden, ambiguous). Set death_year to null.
    When in ANY doubt, choose "unreadable" rather than "absent_certain" — EXCEPT that an incomplete
-   year (fewer than four legible digits, such as "20") is ALWAYS "absent_certain", never "unreadable".
-9. "note": usually null. Only for a genuine edge case, a Croatian note of at most ~6 words
-   (e.g. "osoba živa", "prezime nečitko"). Keep it as short as possible.
+   year (fewer than four digit positions, such as "20") is ALWAYS "absent_certain", never "unreadable".
+9. "note": usually null. The system already records missing name/surname and each year's status
+   automatically in the same note cell (capped at 60 characters), and your note is appended after
+   that — so keep it to a few words and add ONLY what those fields cannot convey (e.g. "osoba živa"
+   to mark a living person, "spomenik oštećen", "dvije obitelji"). Do NOT restate what a null
+   name/surname or a year status already says.
 10. If the image is completely unreadable, set records to [] and explain why in the error field in
    one short sentence (max ~10 words).
 11. All text in the output (names, surnames, notes, error messages) must be in Croatian.
@@ -104,21 +137,30 @@ Worked examples:
   death_year_status="present" (2010).
 - "MARIJA HORVAT 1955 –" (a dash with nothing after it): birth_year_status="present" (1955),
   death_year_status="absent_certain" — the dash is concrete evidence of no death year yet.
-- "1950 – 20" (second date cut off or worn to two digits — an INCOMPLETE year):
-  birth_year_status="present" (1950), death_year_status="absent_certain" — fewer than four digits
-  are legible, so the death year is treated as missing. Do NOT mark it "unreadable"; an incomplete
-  year must not be sent for manual review.
+- "1950 – 20" (the second date was cut off / never completed — only two digit positions, an
+  INCOMPLETE year): birth_year_status="present" (1950), death_year_status="absent_certain" — fewer
+  than four digit positions are present, so the death year is treated as missing. Do NOT mark it
+  "unreadable"; an incomplete year must not be sent for manual review.
 - Only a birth year is carved, with no dash and no visible space left for a second date:
   birth_year_status="present", death_year_status="absent_certain".
 - A worn, chipped corner obscures what would be the birth year, but the death year is crisp:
   birth_year_status="unreadable", death_year_status="present".
 - Two crosses on the same concrete base, both carved "HORVAT", touching each other: they are the
-  SAME grave — extract one record per cross.
+  SAME grave — extract every person from both crosses (here two different Horvats → two records, one
+  per person).
 - A second, unrelated headstone is visible, blurred, in the background: ignore it entirely — it is
   a separate grave, not part of this one.
 - A plaque commemorates "IVAN HORVAT 1920–1999" and "dr. MARIJA HORVAT r. KOVAČ 1925–2015" on the
   same stone: two people, two records, one grave (not two). Record Marija's surname as just "Horvat"
   — DROP the maiden name "r. Kovač" and the title "dr."; names carry no titles or maiden names.
+- Header "OBITELJ HORVAT" (or just "HORVAT" large across the top) over "IVAN 1920–1999" and
+  "MARA 1925–2015": two records — Ivan Horvat and Mara Horvat; the shared header surname applies to
+  both, surname must NOT be null.
+- "IVAN HORVAT 1940–2010. Uspomenu čuvaju supruga Marija i sin Petar": ONE record — Ivan Horvat.
+  Marija and Petar are living mourners in the dedication block and get NO record, even though their
+  full names appear.
+- "IVAN HORVAT pok. PETRA 1930–2000": name "Ivan", surname "Horvat" — "pok. Petra" is a patronymic
+  (son of the late Petar), not a surname; drop it.
 - "VJEČNI DOM MARE I PAVE" (a possessive dedication with the names in the genitive): the two people
   are Mara and Pavo — convert the genitive "Mare"/"Pave" back to the nominative "Mara"/"Pavo".
   Likewise "Vječni dom Ivana Horvata" → name "Ivan", surname "Horvat" (nominative), not "Ivana"/"Horvata".
@@ -173,13 +215,13 @@ _EXTRACT_TOOL = {
                         "birth_year_status": {
                             "type": "string",
                             "enum": ["present", "inferred", "absent_certain", "unreadable"],
-                            "description": "present = legible; inferred = not inscribed but derived with high confidence (e.g. death year minus age); absent_certain = surely none; unreadable = cannot read.",
+                            "description": "present = legible; inferred = not fully legible (missing, or a worn digit) but derived with high confidence (e.g. death year minus age, or a worn digit fixed from a spouse's year); absent_certain = surely none; unreadable = cannot read at all.",
                         },
                         "death_year": {"type": ["integer", "null"]},
                         "death_year_status": {
                             "type": "string",
                             "enum": ["present", "inferred", "absent_certain", "unreadable"],
-                            "description": "present = legible; inferred = not inscribed but derived with high confidence (e.g. birth year plus age); absent_certain = surely none; unreadable = cannot read.",
+                            "description": "present = legible; inferred = not fully legible (missing, or a worn digit) but derived with high confidence (e.g. birth year plus age, or a worn digit fixed from a spouse's year); absent_certain = surely none; unreadable = cannot read at all.",
                         },
                         "note": {"type": ["string", "null"]},
                     },
