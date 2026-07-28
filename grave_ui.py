@@ -44,8 +44,8 @@ SECS_PER_IMAGE_GUESS = 4
 
 # Rough per-image cost estimate for the pre-run preview only (the live counter during
 # a run uses the real cost the extractor reports). Figures are scaled from a measured
-# Opus average by per-token price. Opus 5 and Fable 5 think by default, so their real
-# cost may land above these figures.
+# Opus average by per-token price. All three models run adaptive thinking by default,
+# so the real cost may land above these figures — especially at xhigh/max effort.
 COST_PER_IMAGE_BY_MODEL = {
     "claude-fable-5":  0.050,
     "claude-opus-5":   0.025,
@@ -68,7 +68,9 @@ EFFORT_BY_MODEL = {
 }
 
 PROGRESS_RE = re.compile(r"^\[(\d+)/(\d+)\]\s")
-RESULT_RE = re.compile(r"\b(OK|PARTIAL|FAILED)(?:\s|\()")
+# Anchored to the " ... " the extractor prints between the filename and the verdict, so a
+# photo named "OK (west section).jpg" cannot make a FAILED image count as OK.
+RESULT_RE = re.compile(r"\.\.\. (OK|PARTIAL|FAILED)(?:\s|\(|$)")
 DONE_RE = re.compile(r"^Done\. \d+ images processed")
 COST_RE = re.compile(r"\(total: \$([0-9.]+)\)")
 
@@ -77,8 +79,10 @@ class App:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title(f"TRON-GRAVE {__version__}")
-        self.root.geometry("960x640")
-        self.root.minsize(720, 460)
+        # Wide enough for the full control row: Start/Stop, both checkboxes, and the three
+        # Open/Retry buttons. At 960 the last button was clipped off-screen.
+        self.root.geometry("1180x700")
+        self.root.minsize(900, 460)
 
         self.input_var = tk.StringVar()
         self.output_var = tk.StringVar()
@@ -103,6 +107,11 @@ class App:
         self._search_index = "1.0"
         self._is_retry_run = False
         self._retry_out_dir: Path | None = None
+        self._stop_requested = False
+        self._launched_dry_run = False
+        self._saw_done_line = False
+        self._last_stderr = ""
+        self._api_key: str = ""
 
         self._load_settings()
         self._apply_theme()
@@ -258,12 +267,12 @@ class App:
         self.btn_start.grid(row=0, column=0, padx=(0, 6), pady=4)
         self.btn_stop = ttk.Button(ctrl, text="Stop", command=self._on_stop, state="disabled")
         self.btn_stop.grid(row=0, column=1, padx=6, pady=4)
-        ttk.Checkbutton(ctrl, text="Dry run (list only)", variable=self.dry_run_var).grid(
-            row=0, column=2, padx=12
-        )
-        ttk.Checkbutton(
+        self.chk_dry = ttk.Checkbutton(ctrl, text="Dry run (list only)", variable=self.dry_run_var)
+        self.chk_dry.grid(row=0, column=2, padx=12)
+        self.chk_resume = ttk.Checkbutton(
             ctrl, text="Nastavi (preskoči obrađene)", variable=self.resume_var
-        ).grid(row=0, column=3, padx=(0, 12))
+        )
+        self.chk_resume.grid(row=0, column=3, padx=(0, 12))
 
         self.btn_open_csv = ttk.Button(
             ctrl, text="Open output.csv",
@@ -400,9 +409,14 @@ class App:
             self.btn_retry_byhand.configure(state="disabled")
             return
         byhand = Path(out) / "byhand"
-        has_images = byhand.is_dir() and any(
-            f.is_file() and is_supported_image(f) for f in byhand.iterdir()
-        )
+        try:
+            has_images = byhand.is_dir() and any(
+                f.is_file() and is_supported_image(f) for f in byhand.iterdir()
+            )
+        except OSError:
+            # An unreadable output folder must not take the whole app down: this runs
+            # from __init__, so an uncaught OSError here means the window never opens.
+            has_images = False
         self.btn_retry_byhand.configure(state="normal" if has_images else "disabled")
 
     # ----- start / stop / lifecycle -----------------------------------------
@@ -421,11 +435,21 @@ class App:
             messagebox.showerror("Bad input", f"Input folder does not exist:\n{in_dir}")
             return
 
+        try:
+            image_count = sum(1 for f in in_dir.iterdir() if f.is_file() and is_supported_image(f))
+        except OSError as e:
+            messagebox.showerror("Bad input", f"Cannot read input folder:\n{e}")
+            return
+        if image_count == 0:
+            messagebox.showwarning(
+                "No images",
+                f"{in_dir}\n\ncontains no supported images (.jpg/.jpeg/.png/.webp).\n\n"
+                "Nothing to process — HEIC/HEIF photos must be converted to JPG first.",
+            )
+            return
+
         if not self.dry_run_var.get():
-            api_key = self.api_key_var.get().strip()
-            if not api_key:
-                load_dotenv(PROJECT_DIR / ".env", override=False)
-                api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+            api_key = self._resolve_api_key()
             if not api_key:
                 messagebox.showerror(
                     "Missing API key",
@@ -433,7 +457,7 @@ class App:
                     "Get a key at: console.anthropic.com",
                 )
                 return
-            os.environ["ANTHROPIC_API_KEY"] = api_key
+            self._api_key = api_key
         self._save_settings()
 
         try:
@@ -461,10 +485,12 @@ class App:
             existing = out_dir / "output.csv"
             if existing.exists():
                 rows = self._csv_row_count(existing)
+                # Timestamped so a second overwrite cannot clobber the first backup.
+                backup = out_dir / f"output.{time.strftime('%Y%m%d-%H%M%S')}.bak.csv"
                 choice = messagebox.askyesnocancel(
                     "output.csv exists",
                     f"{existing} already exists ({rows} data rows).\n\n"
-                    "Yes — back up to output.csv.bak and overwrite\n"
+                    f"Yes — back up to {backup.name} and overwrite\n"
                     "No  — overwrite without backup\n"
                     "Cancel — abort",
                 )
@@ -473,7 +499,7 @@ class App:
                     return
                 try:
                     if choice:
-                        existing.replace(out_dir / "output.csv.bak")
+                        existing.replace(backup)
                 except OSError as e:
                     messagebox.showerror("Cannot rotate files", str(e))
                     self._release_lock()
@@ -497,10 +523,22 @@ class App:
 
         self._is_retry_run = False
         self._retry_out_dir = None
+        self._launched_dry_run = self.dry_run_var.get()
         self._launch_subprocess(cmd)
 
+    def _resolve_api_key(self) -> str:
+        key = self.api_key_var.get().strip()
+        if not key:
+            load_dotenv(PROJECT_DIR / ".env", override=False)
+            key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        return key
+
     def _launch_subprocess(self, cmd: list[str]):
+        # The key goes only into the extractor's environment -- putting it in os.environ
+        # would leak it to every other child too (xdg-open, notify-send, open, startfile).
         env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
+        if self._api_key:
+            env["ANTHROPIC_API_KEY"] = self._api_key
 
         if sys.platform == "win32":
             popen_extra = {"creationflags": subprocess.CREATE_NO_WINDOW}
@@ -552,6 +590,7 @@ class App:
         if not self.proc:
             return
         self._append_log("[stop requested]\n", "info")
+        self._stop_requested = True
         self.btn_stop.configure(state="disabled")
         threading.Thread(target=self._terminate_run, daemon=True).start()
 
@@ -561,7 +600,22 @@ class App:
         if not proc or pgid is None or proc.poll() is not None:
             return
         if sys.platform == "win32":
+            # In the one-file PyInstaller build the process we spawned is the bootloader,
+            # not the Python process doing the work -- terminating it alone can leave the
+            # extractor running detached, still making paid API calls with no window to
+            # stop it. taskkill /T takes down the whole tree.
+            try:
+                subprocess.run(
+                    ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=15,
+                )
+            except (OSError, subprocess.SubprocessError):
+                pass
             for kill_fn, wait_ticks in ((proc.terminate, 30), (proc.kill, 0)):
+                if proc.poll() is not None:
+                    return
                 try:
                     kill_fn()
                 except (OSError, ProcessLookupError):
@@ -642,12 +696,18 @@ class App:
             self._update_progress(done, total)
 
         if DONE_RE.match(line):
+            self._saw_done_line = True
             self._append_log(line, "done")
             return
 
         tag = "stderr" if kind == "stderr" else None
         prefix = "[stderr] " if kind == "stderr" else ""
+        if kind == "stderr" and line.strip():
+            self._last_stderr = line.strip()
         self._append_log(prefix + line, tag)
+
+    def _last_error_line(self) -> str:
+        return self._last_stderr or "See the log below for details."
 
     def _update_progress(self, done: int, total: int):
         if self.last_total != total:
@@ -707,11 +767,20 @@ class App:
 
         is_retry = self._is_retry_run
         out_dir = self._retry_out_dir if is_retry else Path(self.output_var.get())
-        is_dry = False if is_retry else self.dry_run_var.get()
-        was_stopped = (rc == 130 or rc < 0)
+        is_dry = self._launched_dry_run
+        # Windows has no signal exit codes -- a killed child reports 1, so the only reliable
+        # signal that a non-zero exit was deliberate is that we asked for it.
+        was_stopped = (rc == 130 or rc < 0 or self._stop_requested)
 
         self._set_running(False)
         self._release_lock()
+
+        # The results exist whatever the exit code was; never leave them behind dead buttons.
+        main_dir = Path(self.output_var.get()) if self.output_var.get() else None
+        if main_dir and (main_dir / "output.csv").exists():
+            self.btn_open_csv.configure(state="normal")
+        if main_dir and (main_dir / "byhand").is_dir():
+            self.btn_open_byhand.configure(state="normal")
 
         ok = self.counters["ok"]
         partial = self.counters["partial"]
@@ -719,14 +788,18 @@ class App:
         saved = ok + partial + failed
 
         if was_stopped:
-            self.status_var.set(f"Stopped — {saved} record(s) saved.")
+            self.status_var.set(f"Stopped — {saved} image(s) processed.")
             messagebox.showinfo(
                 "Stopped",
-                f"Stopped. {saved} record(s) saved to output.csv.\n\n"
-                "Re-running on the same folder will reprocess from the start "
-                "(already-processed images will be re-sent to the API).",
+                f"Stopped. {saved} image(s) processed and saved to output.csv.\n\n"
+                "To carry on where this run left off, tick "
+                "\"Nastavi (preskoči obrađene)\" before starting again — "
+                "without it, every processed image is re-sent to the API and paid for twice.",
             )
-        elif rc in (0, 2):
+        # Exit code 2 means "finished with issues", but argparse and the CPython launcher
+        # also exit 2 on failures that never processed anything -- so require the
+        # extractor's own completion line before believing it.
+        elif rc == 0 or (rc == 2 and (is_dry or self._saw_done_line)):
             self._append_log(f"\n[exit code {rc}]\n", "info")
             if is_dry:
                 self.status_var.set("Dry run complete.")
@@ -734,22 +807,17 @@ class App:
                 self.status_var.set(
                     f"Done — {ok} OK · {partial} manual · {failed} failed · ${self.total_cost:.2f}"
                 )
-                if is_retry:
-                    self._notify_done()
-                    self._show_summary_popup(out_dir / "output.csv", title="Retry sažetak (Opus)")
-                else:
-                    if (out_dir / "output.csv").exists():
-                        self.btn_open_csv.configure(state="normal")
-                    if (out_dir / "byhand").is_dir():
-                        self.btn_open_byhand.configure(state="normal")
-                    self._notify_done()
-                    self._show_summary_popup(out_dir / "output.csv", title="Sažetak obrade")
+                self._notify_done()
+                self._show_summary_popup(
+                    out_dir / "output.csv",
+                    title="Retry sažetak (Opus)" if is_retry else "Sažetak obrade",
+                )
         else:
             self.status_var.set(f"Failed (exit code {rc}).")
             self._append_log(f"\n[failed, exit code {rc}]\n", "stderr")
             messagebox.showerror(
                 "Run failed",
-                f"Extractor exited with code {rc}. See log for details.",
+                f"Extractor exited with code {rc}.\n\n{self._last_error_line()}",
             )
 
         self.proc = None
@@ -840,17 +908,14 @@ class App:
         ):
             return
 
-        api_key = self.api_key_var.get().strip()
-        if not api_key:
-            load_dotenv(PROJECT_DIR / ".env", override=False)
-            api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        api_key = self._resolve_api_key()
         if not api_key:
             messagebox.showerror(
                 "Missing API key",
                 "Enter your Anthropic API key in the 'API Key' field above, then click Save.",
             )
             return
-        os.environ["ANTHROPIC_API_KEY"] = api_key
+        self._api_key = api_key
 
         try:
             retry_out.mkdir(parents=True, exist_ok=True)
@@ -862,6 +927,7 @@ class App:
         self._set_running(True)
         self._is_retry_run = True
         self._retry_out_dir = retry_out
+        self._launched_dry_run = False
 
         cmd = [
             *_EXTRACTOR_CMD,
@@ -921,6 +987,8 @@ class App:
             self.btn_retry_byhand.configure(state="disabled")
             self.model_combo.configure(state="disabled")
             self.effort_combo.configure(state="disabled")
+            self.chk_dry.configure(state="disabled")
+            self.chk_resume.configure(state="disabled")
             self.status_var.set("Starting…")
         else:
             self.btn_start.configure(state="normal")
@@ -929,12 +997,17 @@ class App:
             self.btn_out.configure(state="normal")
             self.model_combo.configure(state="readonly")
             self.effort_combo.configure(state="readonly")
+            self.chk_dry.configure(state="normal")
+            self.chk_resume.configure(state="normal")
 
     def _reset_run_state(self):
         self.counters = {"ok": 0, "partial": 0, "failed": 0}
         self.total_cost = 0.0
         self.last_total = None
         self.run_start_time = None
+        self._stop_requested = False
+        self._saw_done_line = False
+        self._last_stderr = ""
         self.progress.configure(mode="determinate", value=0, maximum=100)
         self.log.configure(state="normal")
         self.log.delete("1.0", "end")
@@ -1018,6 +1091,8 @@ class App:
         try:
             with SETTINGS_PATH.open(encoding="utf-8") as f:
                 data = json.load(f)
+            if not isinstance(data, dict):
+                return
             if isinstance(data.get("input"), str):
                 self.input_var.set(data["input"])
             if isinstance(data.get("output"), str):
@@ -1047,6 +1122,8 @@ class App:
                     },
                     f,
                 )
+            # The file holds the API key in plaintext — keep it owner-only.
+            os.chmod(SETTINGS_PATH, 0o600)
         except OSError:
             pass
 

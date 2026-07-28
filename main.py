@@ -14,10 +14,12 @@ if sys.stderr is None:
 if "--_run-extractor" in sys.argv:
     sys.argv.remove("--_run-extractor")
     # Force UTF-8 on the pipes — Windows defaults to cp1252 which can't
-    # encode Croatian characters (č, ć, š, đ, ž).
+    # encode Croatian characters (č, ć, š, đ, ž). Line buffering is the frozen
+    # build's equivalent of `-u`: without it stdout to a pipe is block-buffered
+    # and the GUI's progress bar runs a full image behind.
     for _s in (sys.stdout, sys.stderr):
         if _s is not None and hasattr(_s, "reconfigure"):
-            _s.reconfigure(encoding="utf-8", errors="replace")
+            _s.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     from grave_extractor import main as _extractor_main
     sys.exit(_extractor_main())
 else:
