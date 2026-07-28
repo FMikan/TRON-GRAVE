@@ -250,8 +250,9 @@ _EXTRACT_TOOL = {
 }
 
 # Cache the system prompt + tool definition (stable across every image in a run).
-# Below the model's minimum cacheable prefix (~2048 tok on Sonnet, ~4096 on Opus)
-# this silently has no effect and no extra cost -- see shared/prompt-caching.md.
+# Below the model's minimum cacheable prefix this silently has no effect and costs
+# nothing extra. Minimums: 1024 tok on Sonnet 5, 512 on Opus 5 / Fable 5 -- this
+# prompt runs ~4k tokens, so it caches on every model the UI offers.
 _SYSTEM_BLOCKS = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
 
 # USD per million tokens: (input, output). Cache write = input_rate*1.25, cache read = input_rate*0.1.
@@ -259,6 +260,8 @@ MODEL_PRICING = {
     "claude-sonnet-5":   (3.00, 15.00),
     "claude-sonnet-4-6": (3.00, 15.00),
     "claude-opus-4-8":   (5.00, 25.00),
+    "claude-opus-5":     (5.00, 25.00),
+    "claude-fable-5":    (10.00, 50.00),
 }
 _DEFAULT_PRICING = (3.00, 15.00)
 
@@ -402,16 +405,18 @@ def _jittered(delay: float) -> float:
 
 
 def _call_api(client, model: str, mime: str, b64: str, effort: str | None = None):
-    # temperature is only accepted on the Sonnet 4.x family. Sonnet 5, Opus 4.7/4.8
-    # and Fable reject it with 400 "temperature is deprecated for this model".
+    # temperature is only accepted on the Sonnet 4.x family. Sonnet 5, Opus 4.7/4.8,
+    # Opus 5 and Fable 5 reject it with 400 "temperature is deprecated for this model".
     params: dict = {"temperature": 0} if "sonnet-4" in model else {}
     if effort:
         params["output_config"] = {"effort": effort}
     return client.messages.create(
         model=model,
         # Room for two scratchpad fields (raw_text + reasoning) plus every record on a
-        # multi-person grave; 1024 risked truncating large graves. Only generated tokens are billed.
-        max_tokens=4096,
+        # multi-person grave; 1024 risked truncating large graves. Headroom on top of that
+        # for thinking, which shares this budget (on by default on Opus 5, always on for
+        # Fable 5). Only generated tokens are billed, so the ceiling is free until used.
+        max_tokens=8192,
         system=_SYSTEM_BLOCKS,
         tools=[_EXTRACT_TOOL],
         tool_choice={"type": "tool", "name": "extract_burial_records"},
@@ -495,7 +500,19 @@ def process_image(client, model: str, path: Path, record_id: str,
     # model extracted the data -- attach the real cost to every return from here on.
     cost = _compute_cost(model, response.usage)
 
-    data = response.content[0].input
+    # Adaptive thinking (on by default for Opus 5, always on for Fable 5) can put a
+    # thinking block ahead of the tool call, and a safety refusal yields no tool call
+    # at all -- so look the block up instead of assuming index 0.
+    tool_use = next((b for b in response.content if b.type == "tool_use"), None)
+    if tool_use is None:
+        return ImageResult(
+            status='total_failure',
+            rows=[_empty_row(record_id, "nema odgovora")],
+            reason=f"Model returned no tool call (stop_reason: {response.stop_reason})",
+            cost=cost,
+        )
+
+    data = tool_use.input
     records = data.get("records", [])
     error = data.get("error")
 

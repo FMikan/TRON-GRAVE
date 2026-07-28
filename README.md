@@ -11,13 +11,13 @@ Designed for digitizing Croatian cemetery records, with full support for Croatia
 ## Features
 
 - **AI-powered OCR** — reads tombstone inscriptions using Claude Vision (Anthropic API)
-- **Model selection** — choose between **Claude Sonnet 5**, **Claude Sonnet 4.6** (cheaper) and **Claude Opus 4.8** from the GUI dropdown or the `--model` CLI flag
+- **Model selection** — choose between **Claude Sonnet 5** (cheapest), **Claude Opus 5** and **Claude Fable 5** from the GUI dropdown, or any model via the `--model` CLI flag
 - **Effort control** — pick how hard the model works per image (`low` → `max`) from the GUI dropdown or `--effort`; the choices adapt to the selected model
 - **Multi-person tombstones** — extracts records for each person on a single stone
 - **Multi-marker graves** — reads *all* plaques, headstones and crosses that belong to one grave (shared frame, surname, grouping or style), instead of stopping at the first one; ambiguous neighbours are flagged for manual review rather than guessed
 - **Conservative extraction** — leaves fields blank rather than guessing uncertain data
 - **Smart year handling** — for both birth and death years, distinguishes a *certain* absence (e.g. person still living, or no birth date inscribed) from an *unreadable* year, so records with a legitimately missing year are passed as **OK** instead of being needlessly flagged for review
-- **Prompt caching** — on Sonnet 4.6 / Sonnet 5, the shared instructions are cached after the first image and reused for the rest of the run, cutting the per-image system-prompt cost by ~90% for the whole batch (not supported on Opus 4.8 — its prompt falls under the cache minimum)
+- **Prompt caching** — the shared instructions are cached after the first image and reused for the rest of the run, cutting the per-image system-prompt cost by ~90% for the whole batch. The prompt is well above the cache minimum on all three offered models (1024 tokens on Sonnet 5, 512 on Opus 5 and Fable 5), so this applies whichever you pick
 - **Batch processing** — processes entire folders of images automatically
 - **Smart image compression** — auto-resizes oversized images to fit API requirements
 - **Manual review queue** — copies images needing review to a `byhand/` folder for manual inspection
@@ -25,7 +25,7 @@ Designed for digitizing Croatian cemetery records, with full support for Croatia
 - **Real-time progress & live cost counter** — GUI shows progress bar, ETA, and the *real* running API cost (computed from each response's actual token usage, not an estimate)
 - **End-of-run summary** — a popup with OK/manual/failed counts, the most common review reasons, and total cost, shown as soon as a run finishes
 - **Resume interrupted runs** — check "Nastavi (preskoči obrađene)" to skip images already in `output.csv` and append only the new ones, instead of reprocessing (and re-paying for) everything
-- **Retry byhand with Opus** — after a run finishes, a button lets you re-run just the `byhand/` images through Opus 4.8 at high effort into a separate `byhand_retry/` folder, without touching the original `output.csv`
+- **Retry byhand with Opus** — after a run finishes, a button lets you re-run just the `byhand/` images through Opus 5 at high effort into a separate `byhand_retry/` folder, without touching the original `output.csv`
 - **Automatic retries** — retries failed API calls with exponential backoff
 - **Settings persistence** — remembers your folders, API key, and chosen model between sessions
 - **Dry-run mode** — preview image discovery without making any API calls
@@ -92,9 +92,9 @@ TRON-GRAVE uses the **Anthropic Claude API** to analyze tombstone images. You ne
 
 | Model | Est. cost/image | Basis |
 |---|---|---|
-| Claude Sonnet 4.6 (`claude-sonnet-4-6`) | ~$0.005 | estimate |
 | Claude Sonnet 5 (`claude-sonnet-5`) | ~$0.006 | estimate; ~$3/$15 per MTok, intro $2/$10 until Aug 31 2026 |
-| Claude Opus 4.8 (`claude-opus-4-8`) | ~$0.025 | **measured average from real runs** |
+| Claude Opus 5 (`claude-opus-5`) | ~$0.025 | scaled from a measured Opus average; $5/$25 per MTok |
+| Claude Fable 5 (`claude-fable-5`) | ~$0.050 | estimate; $10/$50 per MTok — 2× Opus |
 
 These are only for the *before-you-start* estimate. Once a run is going, the status bar and the
 end-of-run summary show the **real** cost, computed from each API response's actual token usage
@@ -113,7 +113,7 @@ harder per image at higher token cost; drop to `low`/`medium` for cheaper, faste
 2. Download the latest `TRON-GRAVE.exe`
 3. Double-click to run — no Python or installation required
 4. Enter your Anthropic API key when prompted on first launch
-5. (Optional) Pick a **Model** (Sonnet 4.6 default · Sonnet 5 · Opus 4.8) and an **Effort** level
+5. (Optional) Pick a **Model** (Sonnet 5 default · Opus 5 · Fable 5) and an **Effort** level
 6. Select your input folder (photos) and output folder, then click **Start**
 
 ---
@@ -212,7 +212,8 @@ Options:
   --input   PATH     Folder containing tombstone images (required)
   --output  PATH     Folder where results will be saved (required)
   --model   NAME     Claude model to use (default: claude-sonnet-4-6).
-                     Common values: claude-sonnet-5, claude-sonnet-4-6, claude-opus-4-8
+                     Accepts any model id, not just the ones in the GUI dropdown.
+                     GUI values: claude-sonnet-5, claude-opus-5, claude-fable-5
   --effort  LEVEL    Reasoning effort: low | medium | high | xhigh | max (default: model's own).
                      Note: xhigh is not supported on Sonnet 4.6.
   --resume           Skip images whose ID is already in output.csv; append instead of overwriting
@@ -247,7 +248,7 @@ question, and you don't pay to reprocess images you've already paid for once.
 
 **Retry hard images with a stronger model.** Once a run finishes, if `byhand/` has any images, the
 **"Retry byhand (Opus)"** button becomes available. Clicking it re-runs just those images through
-Claude Opus 4.8 at `high` effort, writing results into a separate `byhand_retry/` subfolder (its own
+Claude Opus 5 at `high` effort, writing results into a separate `byhand_retry/` subfolder (its own
 `output.csv` and, if anything is still unreadable, its own `byhand/`) — the original `output.csv` and
 `byhand/` are left untouched, so you can compare the two runs or merge the improved rows in by hand.
 

@@ -42,22 +42,28 @@ MAX_LINE_CHARS = 4096
 SECS_PER_IMAGE_GUESS = 4
 
 # Rough per-image cost estimate for the pre-run preview only (the live counter during
-# a run uses the real cost the extractor reports). Opus figure is a measured average
-# from real runs; the Sonnet figures are unverified estimates.
+# a run uses the real cost the extractor reports). Figures are scaled from a measured
+# Opus average by per-token price. Opus 5 and Fable 5 think by default, so their real
+# cost may land above these figures.
 COST_PER_IMAGE_BY_MODEL = {
-    "claude-opus-4-8":   0.025,
-    "claude-sonnet-5":   0.006,
-    "claude-sonnet-4-6": 0.005,
+    "claude-fable-5":  0.050,
+    "claude-opus-5":   0.025,
+    "claude-sonnet-5": 0.006,
 }
 _DEFAULT_COST_PER_IMAGE_ESTIMATE = 0.01
 
-MODELS = ["claude-sonnet-5", "claude-opus-4-8", "claude-sonnet-4-6"]
+MODELS = [
+    "claude-sonnet-5",
+    "claude-opus-5",
+    "claude-fable-5",
+]
 EFFORT_LEVELS_ALL = ["low", "medium", "high", "xhigh", "max"]
-# xhigh is not supported on the Sonnet 4.x family; everything else takes all levels.
+# Every currently offered model takes all five levels; the table stays per-model so a
+# future model with a narrower range only needs an entry here.
 EFFORT_BY_MODEL = {
-    "claude-sonnet-5":   ["low", "medium", "high", "xhigh", "max"],
-    "claude-opus-4-8":   ["low", "medium", "high", "xhigh", "max"],
-    "claude-sonnet-4-6": ["low", "medium", "high", "max"],
+    "claude-fable-5":  ["low", "medium", "high", "xhigh", "max"],
+    "claude-opus-5":   ["low", "medium", "high", "xhigh", "max"],
+    "claude-sonnet-5": ["low", "medium", "high", "xhigh", "max"],
 }
 
 PROGRESS_RE = re.compile(r"^\[(\d+)/(\d+)\]\s")
@@ -76,7 +82,7 @@ class App:
         self.input_var = tk.StringVar()
         self.output_var = tk.StringVar()
         self.api_key_var = tk.StringVar()
-        self.model_var = tk.StringVar(value="claude-sonnet-4-6")
+        self.model_var = tk.StringVar(value=MODELS[0])
         self.effort_var = tk.StringVar(value="high")
         self.dry_run_var = tk.BooleanVar(value=False)
         self.resume_var = tk.BooleanVar(value=False)
@@ -824,7 +830,7 @@ class App:
         retry_out = out_dir / "byhand_retry"
         if not messagebox.askyesno(
             "Retry s Opusom",
-            f"Ponovno obraditi {n} slika iz byhand/ modelom Claude Opus 4.8?\n\n"
+            f"Ponovno obraditi {n} slika iz byhand/ modelom Claude Opus 5?\n\n"
             "Ovo šalje nove, plaćene API pozive.\n"
             f"Rezultati idu u zaseban folder: {retry_out}",
         ):
@@ -858,7 +864,7 @@ class App:
             "--input", str(byhand_dir),
             "--output", str(retry_out),
             "--verbose",
-            "--model", "claude-opus-4-8",
+            "--model", "claude-opus-5",
             "--effort", "high",
         ]
         self._launch_subprocess(cmd)
@@ -1014,7 +1020,9 @@ class App:
                 self.output_var.set(data["output"])
             if isinstance(data.get("api_key"), str):
                 self.api_key_var.set(data["api_key"])
-            if isinstance(data.get("model"), str):
+            # Ignore a model that is no longer offered -- a saved setting naming a
+            # retired model would otherwise stick in the readonly combobox and get used.
+            if data.get("model") in MODELS:
                 self.model_var.set(data["model"])
             if isinstance(data.get("effort"), str):
                 self.effort_var.set(data["effort"])
