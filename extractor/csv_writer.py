@@ -18,14 +18,19 @@ def append_rows(output_path: Path, rows: list[list]) -> None:
 
 
 def read_processed_ids(output_path: Path) -> set[str]:
-    """IDs already present in an existing output.csv (first column), for --resume."""
+    """IDs already extracted from an existing output.csv, for --resume.
+
+    A failed image still gets a row (carrying its ID and an explanatory note), so keying
+    purely on column 0 would make --resume skip exactly the images that need retrying.
+    Only a row with a name or a surname counts as processed.
+    """
     ids: set[str] = set()
     try:
         with open(output_path, encoding='utf-8-sig', newline='') as f:
             reader = csv.reader(f)
             next(reader, None)  # header
             for row in reader:
-                if row:
+                if len(row) >= 3 and row[0] and (row[1].strip() or row[2].strip()):
                     ids.add(row[0])
     except OSError:
         pass

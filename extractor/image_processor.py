@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import anthropic
-from PIL import Image
+from PIL import Image, ImageOps
 
 from .file_utils import get_mime_type
 
@@ -256,8 +256,10 @@ _EXTRACT_TOOL = {
 _SYSTEM_BLOCKS = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
 
 # USD per million tokens: (input, output). Cache write = input_rate*1.25, cache read = input_rate*0.1.
+# Sonnet 5 is on introductory pricing ($2/$10) through 2026-08-31; after that it
+# reverts to list price ($3/$15) and this row must be updated.
 MODEL_PRICING = {
-    "claude-sonnet-5":   (3.00, 15.00),
+    "claude-sonnet-5":   (2.00, 10.00),
     "claude-sonnet-4-6": (3.00, 15.00),
     "claude-opus-4-8":   (5.00, 25.00),
     "claude-opus-5":     (5.00, 25.00),
@@ -282,6 +284,9 @@ def _compute_cost(model: str, usage) -> float:
 
 
 _RETRY_DELAYS = [2, 4, 8]
+# Status codes that doom the whole run (bad key, no access, unknown model) rather than
+# just this one image (400 bad request, 413 too large) -- only these abort the batch.
+_FATAL_STATUS_CODES = frozenset({401, 403, 404})
 _RECORD_FIELDS = ('name', 'surname', 'birth_year', 'death_year')
 # Only a missing name/surname forces manual review; birth/death years get a
 # certainty status so a *certain* absence can still pass as OK.
@@ -304,6 +309,12 @@ class ImageResult:
 
 def _empty_row(record_id: str, note: str = "") -> list:
     return [record_id, "", "", "", "", note]
+
+
+def append_note(row: list, tag: str) -> None:
+    """Append a tag to a row's Notes cell, keeping the cell within the documented cap."""
+    existing = row[NOTE_INDEX]
+    row[NOTE_INDEX] = (f"{existing}; {tag}" if existing else tag)[:_MAX_NOTE_CHARS]
 
 
 def _year_state(rec: dict, year_field: str, status_field: str) -> str:
@@ -359,11 +370,12 @@ def _build_note(rec: dict, birth_state: str, death_state: str) -> str:
 
     model_note = (rec.get("note") or "").strip()
     if model_note and base:
-        note = f"{base} — {model_note}"
-    elif model_note:
-        note = model_note
+        # The model's note carries what the generated bits cannot ("osoba živa"), and the
+        # base alone can already fill the cap -- so truncate the base, never drop the note.
+        base = base[:max(0, _MAX_NOTE_CHARS - len(model_note) - 3)]
+        note = f"{base} — {model_note}" if base else model_note
     else:
-        note = base
+        note = model_note or base
     return note[:_MAX_NOTE_CHARS]
 
 
@@ -384,14 +396,20 @@ def _recompress(raw: bytes, max_bytes: int) -> bytes | None:
         img = Image.open(io.BytesIO(raw))
     except Exception:
         return None
+    # Re-encoding drops the EXIF block, so bake the orientation into the pixels first --
+    # otherwise a portrait phone photo reaches the model rotated 90°.
+    img = ImageOps.exif_transpose(img)
     if img.mode not in ('RGB',):
         img = img.convert('RGB')
-    for scale in (1.0, 0.5, 0.25):
+    # Shrink before crushing quality: carved lettering survives a smaller image far better
+    # than a full-resolution one at quality 10. The extra 0.125 step keeps the last-resort
+    # compression at least as strong as the old quality-10 floor it replaces.
+    for scale in (1.0, 0.75, 0.5, 0.25, 0.125):
         w, h = img.size
         sized = img if scale == 1.0 else img.resize(
             (max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS
         )
-        for quality in (85, 70, 55, 40, 25, 10):
+        for quality in (85, 70, 55, 40):
             buf = io.BytesIO()
             sized.save(buf, format='JPEG', quality=quality, optimize=True)
             data = buf.getvalue()
@@ -413,10 +431,11 @@ def _call_api(client, model: str, mime: str, b64: str, effort: str | None = None
     return client.messages.create(
         model=model,
         # Room for two scratchpad fields (raw_text + reasoning) plus every record on a
-        # multi-person grave; 1024 risked truncating large graves. Headroom on top of that
-        # for thinking, which shares this budget (on by default on Opus 5, always on for
-        # Fable 5). Only generated tokens are billed, so the ceiling is free until used.
-        max_tokens=8192,
+        # multi-person grave, with headroom for thinking, which shares this budget (adaptive
+        # thinking runs by default on all three offered models when `thinking` is omitted).
+        # Only generated tokens are billed, so the ceiling is free until used; 16000 is the
+        # practical limit for a non-streaming request before SDK HTTP timeouts bite.
+        max_tokens=16000,
         system=_SYSTEM_BLOCKS,
         tools=[_EXTRACT_TOOL],
         tool_choice={"type": "tool", "name": "extract_burial_records"},
@@ -472,6 +491,11 @@ def process_image(client, model: str, path: Path, record_id: str,
         try:
             response = _call_api(client, model, mime, b64, effort)
             break
+        # RateLimitError subclasses APIStatusError, so it MUST be caught first -- otherwise
+        # a 429 lands in the clause below, fails the `>= 500` test and is reported as a
+        # non-retryable error. (The SDK has already retried with backoff by this point.)
+        except (anthropic.RateLimitError, anthropic.APIConnectionError, anthropic.APITimeoutError) as e:
+            last_error = e
         except anthropic.APIStatusError as e:
             status_code = getattr(e, 'status_code', None)
             if status_code is not None and status_code >= 500:
@@ -481,10 +505,8 @@ def process_image(client, model: str, path: Path, record_id: str,
                     status='total_failure',
                     rows=[_empty_row(record_id, "greška API-ja")],
                     reason=str(e),
-                    fatal_api_error=True,
+                    fatal_api_error=status_code in _FATAL_STATUS_CODES,
                 )
-        except (anthropic.RateLimitError, anthropic.APIConnectionError, anthropic.APITimeoutError) as e:
-            last_error = e
 
         if attempt < 3:
             time.sleep(_jittered(_RETRY_DELAYS[attempt]))
@@ -500,7 +522,17 @@ def process_image(client, model: str, path: Path, record_id: str,
     # model extracted the data -- attach the real cost to every return from here on.
     cost = _compute_cost(model, response.usage)
 
-    # Adaptive thinking (on by default for Opus 5, always on for Fable 5) can put a
+    # A turn cut off at max_tokens can still carry a half-written tool_use block, whose
+    # input would parse into silently missing people. Bail before looking at it.
+    if response.stop_reason == "max_tokens":
+        return ImageResult(
+            status='total_failure',
+            rows=[_empty_row(record_id, "odgovor prekinut")],
+            reason="Response hit the max_tokens ceiling before the tool call finished",
+            cost=cost,
+        )
+
+    # Adaptive thinking (on by default on all three offered models) can put a
     # thinking block ahead of the tool call, and a safety refusal yields no tool call
     # at all -- so look the block up instead of assuming index 0.
     tool_use = next((b for b in response.content if b.type == "tool_use"), None)
@@ -557,8 +589,7 @@ def process_image(client, model: str, path: Path, record_id: str,
     ambiguous = bool(data.get("ambiguous_multiple_markers"))
     if ambiguous:
         for row in rows:
-            tag = "provjeri: možda više oznaka"
-            row[NOTE_INDEX] = f"{row[NOTE_INDEX]}; {tag}" if row[NOTE_INDEX] else tag
+            append_note(row, "provjeri: možda više oznaka")
 
     has_missing_core = any(
         any(rec.get(field) is None for field in _CORE_FIELDS)
@@ -566,9 +597,10 @@ def process_image(client, model: str, path: Path, record_id: str,
     )
     has_uncertain_year = any(s == "unreadable" for s in birth_states + death_states)
 
-    # Priority: a missing name/surname always wins, then an unreadable birth/death
-    # year. A *certain* absence of a year needs no review, and an ambiguous
-    # multi-marker grave is only flagged in the note (above) -> both pass as OK.
+    # Priority: a missing name/surname always wins, then an unreadable birth/death year,
+    # then an ambiguous multi-marker grave -- the model saying it may have missed people
+    # is exactly the case a human should look at, as the README's Notes table promises.
+    # A *certain* absence of a year needs no review and still passes as OK.
     if has_missing_core:
         return ImageResult(
             status='partial_success',
@@ -582,6 +614,14 @@ def process_image(client, model: str, path: Path, record_id: str,
             status='partial_success',
             rows=rows,
             reason="Model not certain whether a year of birth or death exists",
+            cost=cost,
+        )
+
+    if ambiguous:
+        return ImageResult(
+            status='partial_success',
+            rows=rows,
+            reason="Nearby markers may belong to this grave and were left out",
             cost=cost,
         )
 

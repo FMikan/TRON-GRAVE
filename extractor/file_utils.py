@@ -1,5 +1,6 @@
 import re
 import shutil
+from collections import Counter
 from pathlib import Path
 
 FILENAME_PATTERN = re.compile(r'^[^_]+_([^_]+)_.+')
@@ -22,6 +23,23 @@ def extract_id(path: Path) -> tuple[str, bool]:
     if match:
         return match.group(1), True
     return path.stem, False
+
+
+def assign_ids(paths: list[Path]) -> dict[Path, tuple[str, bool]]:
+    """Record ID per image, de-colliding against the whole discovered set.
+
+    The pattern takes the second underscore-separated token, which on date-stamped phone
+    filenames is the date: a morning's shoot (IMG_20240513_142233, IMG_20240513_142401, …)
+    would collapse to one ID, making rows untraceable back to the stone and letting
+    --resume skip all but the first. Where an extracted ID is not unique, fall back to the
+    full (unique) stem and report it as unmatched so the row is tagged in the Notes column.
+    """
+    extracted = {p: extract_id(p) for p in paths}
+    counts = Counter(record_id for record_id, _ in extracted.values())
+    return {
+        p: (record_id, matched) if counts[record_id] == 1 else (p.stem, False)
+        for p, (record_id, matched) in extracted.items()
+    }
 
 
 def get_mime_type(path: Path) -> str:
