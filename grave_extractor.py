@@ -10,8 +10,10 @@ from pathlib import Path
 import anthropic
 from dotenv import load_dotenv
 
-from extractor.csv_writer import append_rows, init_csv, read_processed_ids
-from extractor.file_utils import assign_ids, copy_to_byhand, is_supported_image
+from extractor.csv_writer import (
+    append_rows, init_csv, init_processed, mark_processed, read_processed,
+)
+from extractor.file_utils import copy_to_byhand, extract_id, is_supported_image
 from extractor.image_processor import append_note, process_image
 
 
@@ -32,7 +34,7 @@ def parse_args() -> argparse.Namespace:
                         choices=["low", "medium", "high", "xhigh", "max"],
                         help="Reasoning/effort level (output_config.effort). Omit for the model default (high).")
     parser.add_argument("--resume", action="store_true",
-                        help="Skip images whose ID is already in output.csv and append instead of overwriting")
+                        help="Skip images listed in the output folder's .processed file and append instead of overwriting")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print images that would be processed and exit")
     parser.add_argument("--verbose", action="store_true",
@@ -84,21 +86,18 @@ def main() -> int:
     output_csv = output_dir / "output.csv"
     byhand_dir = output_dir / "byhand"
 
-    # IDs are assigned over the whole discovered set so a resume run derives the same ID
-    # for a given photo as the original run did.
-    ids = assign_ids(images)
-
     resuming = args.resume and output_csv.exists()
     if resuming:
-        processed_ids = read_processed_ids(output_csv)
+        processed = read_processed(output_dir)
         before = len(images)
-        images = [img for img in images if ids[img][0] not in processed_ids]
+        images = [img for img in images if img.name not in processed]
         skipped = before - len(images)
         if skipped and args.verbose:
             print(f"Resume: skipping {skipped} already-processed image(s).")
     else:
         try:
             init_csv(output_csv)
+            init_processed(output_dir)
         except OSError as e:
             fatal(f"Cannot write to {output_csv}: {e}")
 
@@ -113,7 +112,7 @@ def main() -> int:
     total_cost = 0.0
 
     for idx, img in enumerate(images, start=1):
-        record_id, matched = ids[img]
+        record_id, matched = extract_id(img)
 
         if args.verbose:
             print(f"[{idx}/{total}] Processing {img.name} ... ", end="", flush=True)
@@ -138,6 +137,11 @@ def main() -> int:
             had_any_issue = True
 
         append_rows(output_csv, result.rows)
+
+        # A failed image still gets a row, so only count it done once something was
+        # actually read off the stone -- otherwise resume would skip what needs retrying.
+        if any(row[1] or row[2] for row in result.rows):
+            mark_processed(output_dir, img)
 
         if result.status == "full_success":
             succeeded += 1

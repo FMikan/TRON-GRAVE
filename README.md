@@ -24,7 +24,7 @@ Designed for digitizing Croatian cemetery records, with full support for Croatia
 - **Notes column** — every edge case (uncertain year, missing field, non-standard filename) is explained inline in the CSV's `Notes` column
 - **Real-time progress & live cost counter** — GUI shows progress bar, ETA, and the *real* running API cost (computed from each response's actual token usage, not an estimate)
 - **End-of-run summary** — a popup with OK/manual/failed counts, the most common review reasons, and total cost, shown as soon as a run finishes
-- **Resume interrupted runs** — check "Nastavi (preskoči obrađene)" to skip images already in `output.csv` and append only the new ones, instead of reprocessing (and re-paying for) everything
+- **Resume interrupted runs** — check "Nastavi (preskoči obrađene)" to skip images an earlier run already got through and append only the new ones, instead of reprocessing (and re-paying for) everything
 - **Retry byhand with Opus** — after a run finishes, a button lets you re-run just the `byhand/` images through Opus 5 at high effort into a separate `byhand_retry/` folder, without touching the original `output.csv`
 - **Automatic retries** — retries failed API calls with exponential backoff
 - **Settings persistence** — remembers your folders, API key, and chosen model between sessions
@@ -48,6 +48,11 @@ img002,Marija,Horvat,1925,,bez god. smrti
 img003,Petar,Kovač,1940,,god. smrti nečitka
 ```
 
+The **`ID`** is the second underscore-separated part of the filename
+(`pokojnici-ploca_305_22-07-2026_11-29-39.jpg` → `305`). A grave photographed more than
+once yields several rows sharing that ID, which is what keeps a grave's markers grouped
+together in the output.
+
 The **`Notes`** column (Croatian) is filled only for edge cases and is the single place
 to look when reviewing results. Typical notes:
 
@@ -64,11 +69,15 @@ to look when reviewing results. Typical notes:
 | `sve nečitko`, `nema podataka` | Nothing could be extracted | Yes — **FAILED** |
 | `odgovor prekinut` | The model's reply hit the token ceiling before it finished; the record may be incomplete | Yes — **FAILED** |
 | `greška API-ja`, `ne mogu otvoriti`, `slika prevelika` | The API call failed, or the file could not be read or compressed to fit | Yes — **FAILED** |
-| `… ID iz naziva` | The ID came from the filename stem rather than the expected pattern — either the filename did not match, or the pattern produced a duplicate ID (common with date-stamped phone photos) and the full stem was used to keep IDs unique | No (appended to any note) |
+| `… ID iz naziva` | The ID came from the whole filename stem rather than the expected `<prefix>_<ID>_<rest>` pattern — either the filename did not match it at all, or the ID position held a date/time stamp instead of an ID (`IMG_20240513_142233`, where taking `20240513` would put a whole day's shoot under one ID) | No (appended to any note) |
 
 The notes are kept intentionally terse to minimise token/CSV size while preserving meaning.
 
 **`byhand/`** — copies of images flagged for manual review (PARTIAL or FAILED rows above)
+
+**`.processed`** — bookkeeping for `--resume`: one image filename per line, for the images
+a run got results out of. Rewritten from scratch by every non-resume run. Delete it and
+`--resume` simply has nothing to skip.
 
 > There is no longer a separate `errors.txt`; all review information now lives in the `Notes` column.
 
@@ -225,7 +234,8 @@ Options:
                      GUI values: claude-sonnet-5, claude-opus-5, claude-fable-5
   --effort  LEVEL    Reasoning effort: low | medium | high | xhigh | max (default: model's own).
                      All three GUI models accept all five levels.
-  --resume           Skip images whose ID is already in output.csv; append instead of overwriting
+  --resume           Skip images already listed in the output folder's .processed file;
+                     append to output.csv instead of overwriting it
   --verbose          Show detailed per-image progress
   --dry-run          List discovered images without making any API calls
 ```
@@ -253,10 +263,11 @@ and the final line before exit reports the run's total: `Total cost: $2.35`.
 
 **Resume an interrupted run.** If a run is stopped (Ctrl+C, the GUI's Stop button, or a crash),
 check **"Nastavi (preskoči obrađene)"** in the GUI (or pass `--resume` on the CLI) before starting
-again on the same output folder. Every processed image already has a row in `output.csv` — resume
-reads that file, skips any image whose ID is already there, and appends only the new ones instead
-of overwriting the file. This also means you don't get asked the "output.csv exists" backup/overwrite
-question, and you don't pay to reprocess images you've already paid for once.
+again on the same output folder. Resume reads the `.processed` file, skips the images listed
+there, and appends the rest to `output.csv` instead of overwriting it. This also means you don't
+get asked the "output.csv exists" backup/overwrite question, and you don't pay to reprocess images
+you've already paid for once. Images that produced nothing readable are left out of `.processed`
+deliberately, so a resume retries them rather than writing them off.
 
 **Retry hard images with a stronger model.** Once a run finishes, if `byhand/` has any images, the
 **"Retry byhand (Opus)"** button becomes available. Clicking it re-runs just those images through

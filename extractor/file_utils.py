@@ -1,9 +1,12 @@
 import re
 import shutil
-from collections import Counter
 from pathlib import Path
 
 FILENAME_PATTERN = re.compile(r'^[^_]+_([^_]+)_.+')
+# A long run of digits in the ID position is a date or time stamp, not a record ID:
+# on IMG_20240513_142233 the pattern would take 20240513 and collapse a whole day's
+# shoot onto one ID. Record IDs are short; six or more digits is a stamp.
+DATESTAMP_PATTERN = re.compile(r'^\d{6,}$')
 SUPPORTED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
 
 _MIME_TYPES = {
@@ -19,27 +22,16 @@ def is_supported_image(path: Path) -> bool:
 
 
 def extract_id(path: Path) -> tuple[str, bool]:
+    """Record ID from a <prefix>_<id>_<rest> filename, else the stem flagged as unmatched.
+
+    IDs are deliberately not de-duplicated: one grave is often photographed several
+    times (pokojnici-ploca_30_…_11-18-49, …_11-19-08), and those rows *should* share
+    the grave's ID. Uniqueness per image comes from the .processed sidecar instead.
+    """
     match = FILENAME_PATTERN.match(path.stem)
-    if match:
+    if match and not DATESTAMP_PATTERN.match(match.group(1)):
         return match.group(1), True
     return path.stem, False
-
-
-def assign_ids(paths: list[Path]) -> dict[Path, tuple[str, bool]]:
-    """Record ID per image, de-colliding against the whole discovered set.
-
-    The pattern takes the second underscore-separated token, which on date-stamped phone
-    filenames is the date: a morning's shoot (IMG_20240513_142233, IMG_20240513_142401, …)
-    would collapse to one ID, making rows untraceable back to the stone and letting
-    --resume skip all but the first. Where an extracted ID is not unique, fall back to the
-    full (unique) stem and report it as unmatched so the row is tagged in the Notes column.
-    """
-    extracted = {p: extract_id(p) for p in paths}
-    counts = Counter(record_id for record_id, _ in extracted.values())
-    return {
-        p: (record_id, matched) if counts[record_id] == 1 else (p.stem, False)
-        for p, (record_id, matched) in extracted.items()
-    }
 
 
 def get_mime_type(path: Path) -> str:

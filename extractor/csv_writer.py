@@ -3,6 +3,11 @@ from pathlib import Path
 
 CSV_COLUMNS = ['ID', 'Name', 'Surname', 'Year of Birth', 'Year of Death', 'Notes']
 
+# Which images a run got through, one filename per line. Resume cannot key on the ID
+# column: several photos of one grave legitimately share an ID, so a processed ID does
+# not mean every photo carrying it was processed.
+PROCESSED_FILE = '.processed'
+
 
 def init_csv(output_path: Path) -> None:
     with open(output_path, 'w', newline='', encoding='utf-8-sig') as f:
@@ -17,21 +22,23 @@ def append_rows(output_path: Path, rows: list[list]) -> None:
             writer.writerow(['' if v is None else v for v in row])
 
 
-def read_processed_ids(output_path: Path) -> set[str]:
-    """IDs already extracted from an existing output.csv, for --resume.
+def init_processed(output_dir: Path) -> None:
+    (output_dir / PROCESSED_FILE).write_text('', encoding='utf-8')
 
-    A failed image still gets a row (carrying its ID and an explanatory note), so keying
-    purely on column 0 would make --resume skip exactly the images that need retrying.
-    Only a row with a name or a surname counts as processed.
+
+def mark_processed(output_dir: Path, image: Path) -> None:
+    with open(output_dir / PROCESSED_FILE, 'a', encoding='utf-8') as f:
+        f.write(f'{image.name}\n')
+
+
+def read_processed(output_dir: Path) -> set[str]:
+    """Image filenames a previous run finished, for --resume.
+
+    Missing on an output folder written before the sidecar existed, in which case
+    nothing is skipped and the whole batch is re-sent.
     """
-    ids: set[str] = set()
     try:
-        with open(output_path, encoding='utf-8-sig', newline='') as f:
-            reader = csv.reader(f)
-            next(reader, None)  # header
-            for row in reader:
-                if len(row) >= 3 and row[0] and (row[1].strip() or row[2].strip()):
-                    ids.add(row[0])
+        text = (output_dir / PROCESSED_FILE).read_text(encoding='utf-8')
     except OSError:
-        pass
-    return ids
+        return set()
+    return {line.strip() for line in text.splitlines() if line.strip()}
