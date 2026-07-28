@@ -20,6 +20,7 @@ from tkinter.scrolledtext import ScrolledText
 from dotenv import load_dotenv
 
 from extractor.file_utils import is_supported_image
+from _version import __version__
 
 
 if getattr(sys, "frozen", False):
@@ -75,7 +76,7 @@ COST_RE = re.compile(r"\(total: \$([0-9.]+)\)")
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("TRON-GRAVE")
+        self.root.title(f"TRON-GRAVE {__version__}")
         self.root.geometry("960x640")
         self.root.minsize(720, 460)
 
@@ -287,9 +288,12 @@ class App:
         prog.grid(row=3, column=0, sticky="ew", padx=14, pady=8)
         prog.columnconfigure(0, weight=1)
         self.progress = ttk.Progressbar(prog, mode="determinate", maximum=100)
-        self.progress.grid(row=0, column=0, sticky="ew")
+        self.progress.grid(row=0, column=0, columnspan=2, sticky="ew")
         ttk.Label(prog, textvariable=self.status_var, foreground="#9aa0a6").grid(
             row=1, column=0, sticky="w", pady=(4, 0)
+        )
+        ttk.Label(prog, text=f"v{__version__}", foreground="#5b606b").grid(
+            row=1, column=1, sticky="e", padx=(12, 0), pady=(4, 0)
         )
 
         log_frame = ttk.Frame(self.root)
