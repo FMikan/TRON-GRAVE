@@ -12,13 +12,16 @@
 ### 1. Open PowerShell in the project folder
 
 ```powershell
-cd D:\apk\folder\trongUI
+cd C:\path\to\TRON-GRAVE
 ```
 
 ### 2. Create and activate a virtual environment
 
+Two separate commands — run them one after the other:
+
 ```powershell
-python -m venv .venv .venv\Scripts\Activate.ps1
+python -m venv .venv
+.venv\Scripts\Activate.ps1
 ```
 
 If you get a script execution error, run this once and retry:
@@ -35,17 +38,21 @@ pip install -r requirements.txt
 
 ### 4. Set up your API key
 
-The `.env` file already exists in the project. Open it in Notepad and make sure it contains:
+Copy the example file and open the copy in Notepad:
+
+```powershell
+Copy-Item .env.example .env
+notepad .env
+```
+
+Set the value:
 
 ```
 ANTHROPIC_API_KEY=your_api_key_here
 ```
 
-If it does not exist, copy the example:
-
-```powershell
-Copy-Item .env.example .env
-```
+(You can skip this entirely if you use the desktop UI — enter the key in the **API Key** field
+and click **Save**.)
 
 ### 5. Run
 
@@ -182,5 +189,7 @@ Results are written to the `--output` folder:
 | File | Contents |
 |---|---|
 | `output.csv` | Extracted burial records (UTF-8 with BOM, Excel-compatible) |
-| `errors.txt` | Images with missing fields or processing errors |
-| `byhand/` | Copies of fully unreadable images for manual review |
+| `byhand/` | Copies of images needing manual review — anything PARTIAL or FAILED |
+
+Anything that needs attention is explained in the CSV's `Notes` column; there is no separate
+`errors.txt`.
