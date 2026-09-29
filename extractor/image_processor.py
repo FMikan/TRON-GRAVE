@@ -9,6 +9,7 @@ import anthropic
 from PIL import Image, ImageOps
 
 from .file_utils import get_mime_type
+from .pricing import compute_cost
 
 
 MAX_IMAGE_BYTES = 3_750_000
@@ -255,34 +256,6 @@ _EXTRACT_TOOL = {
 # prompt runs ~4k tokens, so it caches on every model the UI offers.
 _SYSTEM_BLOCKS = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
 
-# USD per million tokens: (input, output). Cache write = input_rate*1.25, cache read = input_rate*0.1.
-# Sonnet 5 is on introductory pricing ($2/$10) through 2026-08-31; after that it
-# reverts to list price ($3/$15) and this row must be updated.
-MODEL_PRICING = {
-    "claude-sonnet-5":   (2.00, 10.00),
-    "claude-sonnet-4-6": (3.00, 15.00),
-    "claude-opus-4-8":   (5.00, 25.00),
-    "claude-opus-5":     (5.00, 25.00),
-    "claude-fable-5":    (10.00, 50.00),
-}
-_DEFAULT_PRICING = (3.00, 15.00)
-
-
-def _compute_cost(model: str, usage) -> float:
-    """Real USD cost of one API call, from the response's actual token usage."""
-    input_rate, output_rate = MODEL_PRICING.get(model, _DEFAULT_PRICING)
-    base_in = getattr(usage, "input_tokens", 0) or 0
-    cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
-    cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
-    out = getattr(usage, "output_tokens", 0) or 0
-    return (
-        base_in * input_rate
-        + cache_write * input_rate * 1.25
-        + cache_read * input_rate * 0.1
-        + out * output_rate
-    ) / 1_000_000
-
-
 _RETRY_DELAYS = [2, 4, 8]
 # Status codes that doom the whole run (bad key, no access, unknown model) rather than
 # just this one image (400 bad request, 413 too large) -- only these abort the batch.
@@ -520,7 +493,7 @@ def process_image(client, model: str, path: Path, record_id: str,
 
     # A response was received, so this call is billed regardless of how well the
     # model extracted the data -- attach the real cost to every return from here on.
-    cost = _compute_cost(model, response.usage)
+    cost = compute_cost(model, response.usage)
 
     # A turn cut off at max_tokens can still carry a half-written tool_use block, whose
     # input would parse into silently missing people. Bail before looking at it.
