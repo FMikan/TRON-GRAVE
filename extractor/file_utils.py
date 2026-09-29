@@ -1,5 +1,7 @@
+import os
 import re
 import shutil
+import stat
 from pathlib import Path
 
 FILENAME_PATTERN = re.compile(r'^[^_]+_([^_]+)_.+')
@@ -48,5 +50,40 @@ def get_mime_type(path: Path) -> str:
 
 
 def copy_to_byhand(src: Path, byhand_dir: Path) -> None:
+    """Copy a photo into byhand/ for manual review.
+
+    copyfile rather than copy2: a photo marked read-only on the camera would otherwise
+    leave a read-only copy that the next run cannot overwrite.
+    """
     byhand_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, byhand_dir / src.name)
+    dst = byhand_dir / src.name
+    if dst.exists():
+        if dst.resolve() == src.resolve():
+            return
+        _force_unlink(dst)
+    shutil.copyfile(src, dst)
+
+
+def remove_from_byhand(src: Path, byhand_dir: Path) -> None:
+    """Drop a photo's review copy once it has been processed successfully."""
+    dst = byhand_dir / src.name
+    if dst.exists():
+        _force_unlink(dst)
+
+
+def clear_byhand(byhand_dir: Path) -> None:
+    """Delete the photo copies an earlier run left in byhand/ (other files stay)."""
+    if not byhand_dir.is_dir():
+        return
+    for f in byhand_dir.iterdir():
+        if f.is_file() and is_supported_image(f):
+            _force_unlink(f)
+
+
+def _force_unlink(path: Path) -> None:
+    """Delete a file even when it is marked read-only (Windows refuses otherwise)."""
+    try:
+        path.unlink()
+    except PermissionError:
+        os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+        path.unlink()

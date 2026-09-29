@@ -1,7 +1,14 @@
+import os
+import shutil
+import stat
+import tempfile
 import unittest
 from pathlib import Path
 
-from extractor.file_utils import extract_id, is_heic, is_supported_image
+from extractor.file_utils import (
+    clear_byhand, copy_to_byhand, extract_id, is_heic, is_supported_image,
+    remove_from_byhand,
+)
 
 
 class SupportedImageTests(unittest.TestCase):
@@ -37,3 +44,41 @@ class ExtractIdTests(unittest.TestCase):
 
     def test_short_dashed_plot_number_is_kept(self):
         self.assertEqual(extract_id(Path("grob_12-3_foto.jpg")), ("12-3", True))
+
+
+class ByhandTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.src = self.tmp / "in" / "a.jpg"
+        self.src.parent.mkdir()
+        self.src.write_bytes(b"one")
+        self.byhand = self.tmp / "out" / "byhand"
+
+    def test_copy_overwrites_an_earlier_read_only_copy(self):
+        os.chmod(self.src, stat.S_IREAD)            # "Protect" set on the camera
+        copy_to_byhand(self.src, self.byhand)
+        os.chmod(self.src, stat.S_IREAD | stat.S_IWRITE)
+        self.src.write_bytes(b"two")
+        copy_to_byhand(self.src, self.byhand)
+        self.assertEqual((self.byhand / "a.jpg").read_bytes(), b"two")
+
+    def test_copying_a_file_that_is_already_in_byhand_is_a_no_op(self):
+        self.byhand.mkdir(parents=True)
+        inside = self.byhand / "b.jpg"
+        inside.write_bytes(b"keep")
+        copy_to_byhand(inside, self.byhand)
+        self.assertEqual(inside.read_bytes(), b"keep")
+
+    def test_remove_from_byhand(self):
+        copy_to_byhand(self.src, self.byhand)
+        remove_from_byhand(self.src, self.byhand)
+        self.assertFalse((self.byhand / "a.jpg").exists())
+        remove_from_byhand(self.src, self.byhand)   # already gone: no error
+
+    def test_clear_byhand_removes_only_photo_copies(self):
+        copy_to_byhand(self.src, self.byhand)
+        (self.byhand / "notes.txt").write_text("mine")
+        clear_byhand(self.byhand)
+        self.assertEqual([p.name for p in self.byhand.iterdir()], ["notes.txt"])
+        clear_byhand(self.tmp / "missing")          # no folder: no error
