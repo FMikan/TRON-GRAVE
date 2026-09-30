@@ -3,7 +3,6 @@
 
 import atexit
 import csv
-import json
 import os
 import queue
 import re
@@ -17,7 +16,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 
 import ui_logic
 from extractor.file_utils import is_supported_image
@@ -31,11 +30,7 @@ if getattr(sys, "frozen", False):
 else:
     PROJECT_DIR = Path(__file__).resolve().parent
     _EXTRACTOR_CMD = [sys.executable, "-u", str(Path(__file__).resolve().parent / "grave_extractor.py")]
-SETTINGS_PATH = (
-    Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
-    / "tron-grave"
-    / "ui.json"
-)
+SETTINGS_PATH = ui_logic.settings_path()
 
 LOG_LINE_CAP = 5000
 LOG_TRIM_BATCH = 500
@@ -99,6 +94,7 @@ class App:
         self._saw_done_line = False
         self._last_stderr = ""
         self._api_key: str = ""
+        self._settings: dict = {}
 
         self._load_settings()
         self._apply_theme()
@@ -222,7 +218,7 @@ class App:
         ttk.Entry(top, textvariable=self.api_key_var, show="•").grid(
             row=2, column=1, sticky="ew", padx=6, pady=6
         )
-        ttk.Button(top, text="Spremi", command=self._save_settings).grid(row=2, column=2, padx=6, pady=6)
+        ttk.Button(top, text="Spremi", command=self._on_save_key).grid(row=2, column=2, padx=6, pady=6)
 
         ttk.Label(top, text="Model").grid(row=3, column=0, sticky="w", padx=6, pady=6)
         self.model_combo = ttk.Combobox(
@@ -526,8 +522,9 @@ class App:
     def _resolve_api_key(self) -> str:
         key = self.api_key_var.get().strip()
         if not key:
-            load_dotenv(PROJECT_DIR / ".env", override=False)
-            key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+            # Read .env without loading it into os.environ, which every child process inherits.
+            key = (dotenv_values(PROJECT_DIR / ".env").get("ANTHROPIC_API_KEY")
+                   or os.environ.get("ANTHROPIC_API_KEY") or "").strip()
         return key
 
     def _launch_subprocess(self, cmd: list[str]):
@@ -1085,44 +1082,40 @@ class App:
     # ----- settings ---------------------------------------------------------
 
     def _load_settings(self):
-        try:
-            with SETTINGS_PATH.open(encoding="utf-8") as f:
-                data = json.load(f)
-            if not isinstance(data, dict):
-                return
-            if isinstance(data.get("input"), str):
-                self.input_var.set(data["input"])
-            if isinstance(data.get("output"), str):
-                self.output_var.set(data["output"])
-            if isinstance(data.get("api_key"), str):
-                self.api_key_var.set(data["api_key"])
-            # Ignore a model that is no longer offered -- a saved setting naming a
-            # retired model would otherwise stick in the readonly combobox and get used.
-            if data.get("model") in ui_logic.MODELS:
-                self.model_var.set(ui_logic.MODEL_LABELS[data["model"]])
-            if data.get("effort") in ui_logic.EFFORT_LEVELS:
-                self.effort_var.set(ui_logic.EFFORT_LABELS[data["effort"]])
-        except (OSError, json.JSONDecodeError):
-            pass
+        data = ui_logic.load_settings(SETTINGS_PATH)
+        self._settings = data
+        if isinstance(data.get("input"), str):
+            self.input_var.set(data["input"])
+        if isinstance(data.get("output"), str):
+            self.output_var.set(data["output"])
+        if isinstance(data.get("api_key"), str):
+            self.api_key_var.set(data["api_key"])
+        # Ignore a model that is no longer offered -- a saved setting naming a
+        # retired model would otherwise stick in the readonly combobox and get used.
+        if data.get("model") in ui_logic.MODELS:
+            self.model_var.set(ui_logic.MODEL_LABELS[data["model"]])
+        if data.get("effort") in ui_logic.EFFORT_LEVELS:
+            self.effort_var.set(ui_logic.EFFORT_LABELS[data["effort"]])
 
-    def _save_settings(self):
+    def _save_settings(self, include_key: bool = False) -> bool:
+        """Save folders, model and effort; the API key only when the user clicked Spremi."""
+        data = dict(self._settings)
+        data.update(input=self.input_var.get(), output=self.output_var.get(),
+                    model=self._model_id(), effort=self._effort_id())
+        if include_key:
+            data["api_key"] = self.api_key_var.get().strip()
         try:
-            SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-            with SETTINGS_PATH.open("w", encoding="utf-8") as f:
-                json.dump(
-                    {
-                        "input": self.input_var.get(),
-                        "output": self.output_var.get(),
-                        "api_key": self.api_key_var.get(),
-                        "model": self._model_id(),
-                        "effort": self._effort_id(),
-                    },
-                    f,
-                )
-            # The file holds the API key in plaintext — keep it owner-only.
-            os.chmod(SETTINGS_PATH, 0o600)
+            ui_logic.write_settings(SETTINGS_PATH, data)
         except OSError:
-            pass
+            return False
+        self._settings = data
+        return True
+
+    def _on_save_key(self):
+        if self._save_settings(include_key=True):
+            self.status_var.set("Postavke i API ključ spremljeni.")
+        else:
+            messagebox.showerror("Ne mogu spremiti postavke", f"Ne mogu pisati u {SETTINGS_PATH}.")
 
 
 def main():

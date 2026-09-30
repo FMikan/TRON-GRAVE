@@ -1,5 +1,10 @@
 """Tk-free helpers behind the desktop GUI, kept apart from grave_ui.py so they can be tested."""
 
+import json
+import os
+import sys
+from pathlib import Path
+
 # Weakest to strongest: "Ponovi byhand/" never steps down this list.
 MODELS = [
     "claude-sonnet-5",
@@ -10,7 +15,7 @@ MODELS = [
     "claude-fable-5-1",
 ]
 MODEL_LABELS = {
-    "claude-sonnet-5": "Claude Sonnet 5 (najjeftiniji)",
+    "claude-sonnet-5": "Claude Sonnet 5 (zadani)",
     "claude-sonnet-5-5": "Claude Sonnet 5.5",
     "claude-opus-5": "Claude Opus 5",
     "claude-opus-5-5": "Claude Opus 5.5",
@@ -43,3 +48,56 @@ def model_id(label: str) -> str:
 def effort_id(label: str) -> str:
     """The effort level behind a dropdown label (a level passes through unchanged)."""
     return next((e for e, text in EFFORT_LABELS.items() if text == label), label)
+
+
+# ---- settings ------------------------------------------------------------------------
+
+def settings_path(platform: str = sys.platform, env=os.environ, home: Path | None = None) -> Path:
+    """Where the settings live: %APPDATA% on Windows, Application Support on macOS, XDG elsewhere."""
+    home = home or Path.home()
+    if platform == "win32":
+        base = Path(env.get("APPDATA") or home / "AppData" / "Roaming")
+    elif platform == "darwin":
+        base = home / "Library" / "Application Support"
+    else:
+        base = Path(env.get("XDG_CONFIG_HOME") or home / ".config")
+    return base / "tron-grave" / "ui.json"
+
+
+# Where versions up to 3.5.1 kept the settings, on every OS.
+LEGACY_SETTINGS_PATH = Path.home() / ".config" / "tron-grave" / "ui.json"
+
+
+def load_settings(path: Path, legacy: Path | None = None) -> dict:
+    """The saved settings, moving a file older versions left in ~/.config on first use."""
+    legacy = legacy or LEGACY_SETTINGS_PATH
+    if not path.exists() and legacy != path and legacy.exists():
+        data = _read_json(legacy)
+        if data:
+            try:
+                write_settings(path, data)
+                legacy.unlink()
+            except OSError:
+                pass
+            return data
+    return _read_json(path)
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        with path.open(encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_settings(path: Path, data: dict) -> None:
+    """Write the settings owner-only from the first byte: the file holds the API key."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.chmod(tmp, 0o600)   # O_CREAT's mode only applies when the file is new
+    os.replace(tmp, path)

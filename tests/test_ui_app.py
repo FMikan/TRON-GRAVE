@@ -1,4 +1,6 @@
 import json
+import os
+from unittest import mock
 
 import grave_ui
 import ui_logic
@@ -23,3 +25,38 @@ class LabelTests(AppCase):
         self.settings_path.write_text(json.dumps({"model": "claude-opus-4-8", "effort": "ultra"}))
         self.app._load_settings()
         self.assertEqual((self.app._model_id(), self.app._effort_id()), ("claude-sonnet-5", "high"))
+
+
+class ApiKeyTests(AppCase):
+    def saved(self) -> dict:
+        return json.loads(self.settings_path.read_text(encoding="utf-8")) if self.settings_path.exists() else {}
+
+    def test_other_changes_do_not_save_the_key(self):
+        self.app.api_key_var.set("sk-typed")
+        self.app._on_model_change()
+        self.assertNotIn("api_key", self.saved())
+
+    def test_spremi_saves_the_key_and_says_so(self):
+        self.app.api_key_var.set("  sk-saved  ")
+        self.app._on_save_key()
+        self.assertEqual(self.saved()["api_key"], "sk-saved")
+        self.assertIn("spremljen", self.app.status_var.get())
+
+    def test_a_saved_key_survives_later_changes(self):
+        self.app.api_key_var.set("sk-saved")
+        self.app._on_save_key()
+        self.app._on_model_change()
+        self.assertEqual(self.saved()["api_key"], "sk-saved")
+
+    def test_a_failed_save_is_reported(self):
+        self._patch(grave_ui.ui_logic, "write_settings", mock.Mock(side_effect=OSError("disk full")))
+        self.app._on_save_key()
+        self.dialogs["showerror"].assert_called_once()
+        self.assertNotIn("spremljen", self.app.status_var.get())
+
+    def test_env_file_is_read_without_touching_the_environment(self):
+        (self.tmp / ".env").write_text("ANTHROPIC_API_KEY=sk-env\n", encoding="utf-8")
+        self._patch(grave_ui, "PROJECT_DIR", self.tmp)
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(self.app._resolve_api_key(), "sk-env")
+            self.assertNotIn("ANTHROPIC_API_KEY", os.environ)

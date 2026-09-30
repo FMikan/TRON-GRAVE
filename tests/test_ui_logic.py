@@ -1,5 +1,11 @@
+import os
+import shutil
+import stat
+import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import ui_logic
 from extractor.pricing import MODEL_PRICING
@@ -36,3 +42,45 @@ class CroatianUiTests(unittest.TestCase):
         source = (REPO / "grave_ui.py").read_text(encoding="utf-8")
         for phrase in self.ENGLISH:
             self.assertNotIn(phrase, source, phrase)
+
+
+class SettingsTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_each_os_gets_its_own_config_folder(self):
+        home = Path("/h")
+        self.assertEqual(ui_logic.settings_path("win32", {"APPDATA": "C:/Users/a/AppData/Roaming"}, home),
+                         Path("C:/Users/a/AppData/Roaming/tron-grave/ui.json"))
+        self.assertEqual(ui_logic.settings_path("darwin", {}, home),
+                         home / "Library" / "Application Support" / "tron-grave" / "ui.json")
+        self.assertEqual(ui_logic.settings_path("linux", {"XDG_CONFIG_HOME": "/x"}, home),
+                         Path("/x/tron-grave/ui.json"))
+        self.assertEqual(ui_logic.settings_path("linux", {}, home), home / ".config" / "tron-grave" / "ui.json")
+
+    def test_the_old_file_is_moved_once(self):
+        legacy = self.tmp / "old" / "ui.json"
+        legacy.parent.mkdir()
+        legacy.write_text('{"output": "/o"}', encoding="utf-8")
+        new = self.tmp / "new" / "ui.json"
+        self.assertEqual(ui_logic.load_settings(new, legacy), {"output": "/o"})
+        self.assertFalse(legacy.exists())
+        self.assertEqual(ui_logic.load_settings(new, legacy), {"output": "/o"})
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX permissions")
+    def test_the_file_is_owner_only_from_the_first_byte(self):
+        path = self.tmp / "cfg" / "ui.json"
+        old = os.umask(0o022)
+        try:
+            # chmod is stubbed so only the mode the file was created with can make this pass
+            with mock.patch.object(ui_logic.os, "chmod"):
+                ui_logic.write_settings(path, {"api_key": "k"})
+        finally:
+            os.umask(old)
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
+    def test_a_damaged_file_reads_as_empty(self):
+        path = self.tmp / "ui.json"
+        path.write_text("[1, 2", encoding="utf-8")
+        self.assertEqual(ui_logic.load_settings(path, self.tmp / "none.json"), {})

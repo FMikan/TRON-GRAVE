@@ -31,6 +31,7 @@ class AppCase(unittest.TestCase):
         self._patch(grave_ui.App, "_show_summary_popup", mock.Mock())
         self.launched = []
         self._patch(grave_ui.App, "_launch_subprocess", lambda app, cmd: self.launched.append(cmd))
+        self._patch(grave_ui.ui_logic, "LEGACY_SETTINGS_PATH", self.tmp / "legacy" / "ui.json")
         self.app = grave_ui.App(self.root)
 
     def _patch(self, target, attribute, value):
