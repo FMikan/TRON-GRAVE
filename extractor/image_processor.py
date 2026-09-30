@@ -1,5 +1,6 @@
 import base64
 import io
+import math
 import random
 import time
 from dataclasses import dataclass
@@ -8,11 +9,24 @@ from pathlib import Path
 import anthropic
 from PIL import Image, ImageOps
 
-from .file_utils import get_mime_type
 from .pricing import compute_cost
 
 
-MAX_IMAGE_BYTES = 3_750_000
+# 200 MP phone photos (16320x12240) are real input; Pillow's default decompression-bomb
+# guard (~179 MP) would refuse them. JPEGs that large are decoded shrunk via draft().
+Image.MAX_IMAGE_PIXELS = 250_000_000
+
+# What the vision models actually use (long edge 2576 px, 4,784 visual tokens): anything
+# larger is downscaled server-side, so sending more only costs upload time, and anything
+# over 8000 px is rejected outright. 3.6 MP keeps the ceil-rounded token count under 4,784.
+MAX_LONG_EDGE = 2576
+MAX_PIXELS = 3_600_000
+# The direct Claude API accepts 10 MB per image, base64-encoded (7.5 MB of raw bytes).
+MAX_SEND_BYTES = 7_500_000
+_JPEG_QUALITY = 90
+_MEDIA_TYPES = {"JPEG": "image/jpeg", "MPO": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
+_SENDABLE_MODES = {"RGB", "RGBA", "L", "LA", "P"}
+_EXIF_ORIENTATION = 0x0112
 
 
 SYSTEM_PROMPT = """You are a genealogical data extraction assistant. You will be shown a photograph of a tombstone.
@@ -363,32 +377,56 @@ def _record_to_row(record_id: str, rec: dict, note: str = "") -> list:
     ]
 
 
-def _recompress(raw: bytes, max_bytes: int) -> bytes | None:
-    """Return JPEG bytes <= max_bytes by reducing quality then resolution, or None."""
+class ImageUnreadable(Exception):
+    """Pillow could not fully decode the file (truncated, corrupt, not an image, HEIC...)."""
+
+
+def prepare_image(raw: bytes) -> tuple[bytes, str]:
+    """The bytes and media type to send for one photo.
+
+    Decodes the whole image first, so a truncated file fails here instead of at the API.
+    The media type comes from the content, not the extension. EXIF rotation is baked into
+    the pixels (the API ignores image metadata) and the image is shrunk to what the model
+    uses. When none of that changes anything, the original bytes go out untouched.
+    """
     try:
         img = Image.open(io.BytesIO(raw))
-    except Exception:
-        return None
-    # Re-encoding drops the EXIF block, so bake the orientation into the pixels first --
-    # otherwise a portrait phone photo reaches the model rotated 90°.
-    img = ImageOps.exif_transpose(img)
-    if img.mode not in ('RGB',):
-        img = img.convert('RGB')
-    # Shrink before crushing quality: carved lettering survives a smaller image far better
-    # than a full-resolution one at quality 10. The extra 0.125 step keeps the last-resort
-    # compression at least as strong as the old quality-10 floor it replaces.
-    for scale in (1.0, 0.75, 0.5, 0.25, 0.125):
-        w, h = img.size
-        sized = img if scale == 1.0 else img.resize(
-            (max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS
-        )
-        for quality in (85, 70, 55, 40):
-            buf = io.BytesIO()
-            sized.save(buf, format='JPEG', quality=quality, optimize=True)
-            data = buf.getvalue()
-            if len(data) <= max_bytes:
-                return data
-    return None
+        fmt = img.format
+        width, height = img.size
+        scale = min(1.0, MAX_LONG_EDGE / max(width, height), math.sqrt(MAX_PIXELS / (width * height)))
+        if fmt in ("JPEG", "MPO") and scale < 0.5:
+            img.draft("RGB", (math.ceil(width * scale), math.ceil(height * scale)))
+        orientation = img.getexif().get(_EXIF_ORIENTATION, 1)
+        img.load()
+    except Exception as e:  # Pillow raises many different types for bad input
+        raise ImageUnreadable(str(e) or type(e).__name__) from e
+
+    if (scale == 1.0 and orientation in (None, 1) and img.mode in _SENDABLE_MODES
+            and fmt in _MEDIA_TYPES and len(raw) <= MAX_SEND_BYTES):
+        return raw, _MEDIA_TYPES[fmt]
+
+    try:
+        img = _to_rgb(ImageOps.exif_transpose(img))
+        # draft() may already have shrunk the image by a power of two; finish the job.
+        factor = scale * max(width, height) / max(img.size)
+        if factor < 1.0:
+            img = img.resize(
+                (max(1, round(img.width * factor)), max(1, round(img.height * factor))), Image.LANCZOS
+            )
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=_JPEG_QUALITY, optimize=True)
+    except Exception as e:
+        raise ImageUnreadable(str(e) or type(e).__name__) from e
+    return buf.getvalue(), "image/jpeg"
+
+
+def _to_rgb(img: Image.Image) -> Image.Image:
+    """RGB for JPEG encoding. 16-bit greyscale is scaled to 8 bits instead of clipped white."""
+    if img.mode.startswith("I;16"):
+        img = img.convert("I")
+    if img.mode == "I":
+        img = img.point(lambda v: v * (1 / 256)).convert("L")
+    return img if img.mode == "RGB" else img.convert("RGB")
 
 
 def _jittered(delay: float) -> float:
@@ -436,27 +474,15 @@ def _call_api(client, model: str, mime: str, b64: str, effort: str | None = None
 def process_image(client, model: str, path: Path, record_id: str,
                   effort: str | None = None) -> ImageResult:
     try:
-        raw = path.read_bytes()
-    except (IOError, OSError):
+        image_bytes, mime = prepare_image(path.read_bytes())
+    except (OSError, ImageUnreadable) as e:
         return ImageResult(
             status='total_failure',
             rows=[_empty_row(record_id, "ne mogu otvoriti")],
-            reason="File could not be opened or decoded on disk",
+            reason=f"File could not be read or decoded: {e}",
         )
 
-    mime = get_mime_type(path)
-
-    if len(raw) > MAX_IMAGE_BYTES:
-        raw = _recompress(raw, MAX_IMAGE_BYTES)
-        if raw is None:
-            return ImageResult(
-                status='total_failure',
-                rows=[_empty_row(record_id, "slika prevelika")],
-                reason="Image too large and could not be recompressed to fit API limit",
-            )
-        mime = "image/jpeg"
-
-    b64 = base64.b64encode(raw).decode("ascii")
+    b64 = base64.b64encode(image_bytes).decode("ascii")
 
     last_error: Exception | None = None
     response = None

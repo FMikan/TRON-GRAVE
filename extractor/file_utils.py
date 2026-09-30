@@ -14,13 +14,6 @@ SUPPORTED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
 # Recognised only so they can be reported as skipped: the API cannot take HEIC/HEIF.
 HEIC_EXTENSIONS = {'.heic', '.heif'}
 
-_MIME_TYPES = {
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.png': 'image/png',
-    '.webp': 'image/webp',
-}
-
 
 def is_supported_image(path: Path) -> bool:
     # Dotfiles are never photos: macOS writes a ._<name>.jpg metadata twin next to every
@@ -43,10 +36,6 @@ def extract_id(path: Path) -> tuple[str, bool]:
     if match and not DATESTAMP_PATTERN.match(match.group(1)):
         return match.group(1), True
     return path.stem, False
-
-
-def get_mime_type(path: Path) -> str:
-    return _MIME_TYPES[path.suffix.lower()]
 
 
 def copy_to_byhand(src: Path, byhand_dir: Path) -> None:
