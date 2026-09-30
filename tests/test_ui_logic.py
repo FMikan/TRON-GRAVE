@@ -154,6 +154,9 @@ class ProgressParsingTests(unittest.TestCase):
         self.assertEqual(classify(130, True, False, False), "stopped")
         self.assertEqual(classify(1, True, False, False), "stopped")      # Windows force-kill
         self.assertEqual(classify(0, True, True, False), "done")          # Stop clicked after Done
+        self.assertEqual(classify(1, True, True, False), "done")          # ... taskkill on the bootloader
+        self.assertEqual(classify(130, True, True, False), "done")        # ... SIGINT just before exit
+        self.assertEqual(classify(-9, True, True, False), "done")         # ... escalated to SIGKILL
         self.assertEqual(classify(-9, False, False, False), "interrupted")
         self.assertEqual(classify(130, False, False, False), "interrupted")
         self.assertEqual(classify(1, False, False, False), "failed")

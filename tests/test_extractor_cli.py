@@ -339,3 +339,22 @@ class VerboseFormatTests(CliCase):
         self.assertRegex(lines[1], r"^\[1/2\] OK: p_1_x\.jpg \(1 record\) — \$\d+\.\d{4} \(total: \$\d+\.\d{2}\)$")
         self.assertEqual(lines[2], "[2/2] Processing p_2_x.jpg ...")
         self.assertTrue(lines[3].startswith("[2/2] PARTIAL: p_2_x.jpg (Name or surname could not be read)"))
+
+    def test_a_reason_with_a_line_break_keeps_its_cost_on_the_result_line(self):
+        self.add_image("p_1_x.jpg")
+        _, out, _, _ = self.run_cli(message(answer(record(), error="natpis\noštećen")))
+        lines = out.splitlines()
+        self.assertRegex(lines[1], r"^\[1/1\] PARTIAL: p_1_x\.jpg \(Model reported a problem: natpis oštećen\)"
+                                   r" — \$\d+\.\d{4} \(total: \$\d+\.\d{2}\)$")
+        self.assertTrue(lines[2].startswith("Done. 1 images processed"))
+
+    def test_a_line_break_in_an_api_error_stays_on_one_line_in_the_fatal_path_too(self):
+        for name in ("p_1_x.jpg", "p_2_x.jpg", "p_3_x.jpg"):
+            self.add_image(name)
+        errors = [api_error(400, body="bad gateway\nretry later") for _ in range(3)]
+        code, out, _, _ = self.run_cli(*errors)
+        self.assertEqual(code, 1)
+        lines = out.splitlines()
+        self.assertEqual(len(lines), 6)       # a start and a result line per photo, none split in two
+        self.assertEqual(lines[1], "[1/3] FAILED: p_1_x.jpg (Error code: 400 - bad gateway retry later)")
+        self.assertEqual(lines[5], "[3/3] FAILED: p_3_x.jpg (Error code: 400 - bad gateway retry later)")

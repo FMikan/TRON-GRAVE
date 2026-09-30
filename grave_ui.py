@@ -823,20 +823,20 @@ class App:
                     out_dir / "output.csv",
                     title="Sažetak ponovne obrade" if is_retry else "Sažetak obrade",
                 )
+        elif outcome == "interrupted":
+            self._append_log(f"\n[prekinuto, izlazni kod {rc}]\n", "stderr")
+            self.status_var.set(f"Prekinuto (izlazni kod {rc}).")
+            messagebox.showerror(
+                "Obrada prekinuta",
+                f"Obrada je neočekivano prekinuta (izlazni kod {rc}).\n\n{self._last_error_line()}",
+            )
         else:
             self._append_log(f"\n[neuspjelo, izlazni kod {rc}]\n", "stderr")
-            if outcome == "interrupted":
-                self.status_var.set(f"Prekinuto (izlazni kod {rc}).")
-                messagebox.showerror(
-                    "Obrada prekinuta",
-                    f"Obrada je neočekivano prekinuta (izlazni kod {rc}).\n\n{self._last_error_line()}",
-                )
-            else:
-                self.status_var.set(f"Neuspjelo (izlazni kod {rc}).")
-                messagebox.showerror(
-                    "Obrada nije uspjela",
-                    f"Obrada je završila s izlaznim kodom {rc}.\n\n{self._last_error_line()}",
-                )
+            self.status_var.set(f"Neuspjelo (izlazni kod {rc}).")
+            messagebox.showerror(
+                "Obrada nije uspjela",
+                f"Obrada je završila s izlaznim kodom {rc}.\n\n{self._last_error_line()}",
+            )
 
     def _show_summary_popup(self, csv_path: Path, title: str = "Sažetak obrade"):
         ok = self.counters["ok"]

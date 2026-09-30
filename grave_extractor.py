@@ -210,6 +210,9 @@ def main() -> int:
             )
         total_cost += result.cost
         cost_suffix = f" — ${result.cost:.4f} (total: ${total_cost:.2f})" if result.billed else ""
+        # A result stays on one line, cost suffix last: the GUI reads the running total from its
+        # end, and the reason can carry model or server text with line breaks.
+        reason = " ".join((result.reason or "").split())
 
         # An account-level failure (revoked key, billing, spend cap, no access, unknown model)
         # dooms every remaining image, and so do three API failures in a row (spend limit,
@@ -220,7 +223,7 @@ def main() -> int:
             api_failures_in_row = 0
         if result.fatal_tag or api_failures_in_row >= MAX_CONSECUTIVE_API_FAILURES:
             if args.verbose:
-                print(f"[{idx}/{total}] FAILED: {img.name} ({result.reason})", flush=True)
+                print(f"[{idx}/{total}] FAILED: {img.name} ({reason})", flush=True)
             if result.fatal_tag:
                 fatal(f"API call failed: {result.reason}", result.fatal_tag)
             fatal(f"{MAX_CONSECUTIVE_API_FAILURES} API calls in a row failed; stopping so the rest "
@@ -258,11 +261,11 @@ def main() -> int:
         elif result.status == "partial_success":
             partial += 1
             had_any_issue = True
-            verdict = f"PARTIAL: {img.name} ({result.reason}){cost_suffix}"
+            verdict = f"PARTIAL: {img.name} ({reason}){cost_suffix}"
         else:
             failed += 1
             had_any_issue = True
-            verdict = f"FAILED: {img.name} ({result.reason}){cost_suffix}"
+            verdict = f"FAILED: {img.name} ({reason}){cost_suffix}"
         if args.verbose:
             print(f"[{idx}/{total}] {verdict}", flush=True)
 

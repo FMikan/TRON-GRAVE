@@ -159,10 +159,12 @@ def classify_exit(rc: int, stop_requested: bool, saw_done: bool, is_dry: bool) -
     """How a run ended: "done", "stopped" (the user's Stop), "interrupted" (killed without a
     Stop click) or "failed"."""
     # Windows has no signal exit codes -- a killed child reports 1 -- so a Stop click is the
-    # only reliable sign a non-zero exit was deliberate. The Done line outranks it: Stop
-    # clicked just after the last photo did not stop anything.
-    if stop_requested and not saw_done:
-        return "stopped"
+    # only reliable sign a non-zero exit was deliberate. The Done line outranks it, whatever
+    # code the kill left (1 from taskkill on the one-file build's bootloader, which outlives
+    # the extractor; 130 from a SIGINT just before exit): Stop clicked after the last photo
+    # did not stop anything.
+    if stop_requested:
+        return "done" if saw_done else "stopped"
     # Exit code 2 means "finished with issues", but argparse and the CPython launcher also
     # exit 2 on failures that never processed anything -- so require the extractor's own
     # completion line before believing it.

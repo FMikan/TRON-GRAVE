@@ -178,3 +178,13 @@ class ProgressTests(AppCase):
         self.assertEqual(self.app._flagged, {"b.jpg", "c.jpg", "OK (west).jpg"})
         self.app._reset_run_state()
         self.assertEqual((self.app._flagged, self.app._run_files, self.app._done_count), (set(), {}, 0))
+
+    def test_the_log_says_which_way_a_bad_run_ended(self):
+        for rc, marker, other in ((-9, "[prekinuto, izlazni kod -9]", "neuspjelo"),
+                                  (1, "[neuspjelo, izlazni kod 1]", "prekinuto")):
+            with self.subTest(rc=rc):
+                self.app._reset_run_state()
+                self.app._on_proc_exit(rc)
+                log = self.app.log.get("1.0", "end")
+                self.assertIn(marker, log)
+                self.assertNotIn(other, log)
