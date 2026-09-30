@@ -48,6 +48,15 @@ class ApiKeyTests(AppCase):
         self.app._on_model_change()
         self.assertEqual(self.saved()["api_key"], "sk-saved")
 
+    def test_a_saved_key_survives_a_restart_and_an_unsaved_edit(self):
+        self.settings_path.parent.mkdir(parents=True)
+        self.settings_path.write_text(json.dumps({"api_key": "sk-old"}), encoding="utf-8")
+        self.app._load_settings()
+        self.app.api_key_var.set("sk-typed")
+        self.app._on_model_change()
+        saved = self.saved()
+        self.assertEqual((saved["api_key"], saved["model"]), ("sk-old", "claude-sonnet-5"))
+
     def test_a_failed_save_is_reported(self):
         self._patch(grave_ui.ui_logic, "write_settings", mock.Mock(side_effect=OSError("disk full")))
         self.app._on_save_key()
@@ -60,3 +69,11 @@ class ApiKeyTests(AppCase):
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual(self.app._resolve_api_key(), "sk-env")
             self.assertNotIn("ANTHROPIC_API_KEY", os.environ)
+
+    def test_key_order_is_field_then_exported_variable_then_env_file(self):
+        (self.tmp / ".env").write_text("ANTHROPIC_API_KEY=sk-old\n", encoding="utf-8")
+        self._patch(grave_ui, "PROJECT_DIR", self.tmp)
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-new"}, clear=True):
+            self.assertEqual(self.app._resolve_api_key(), "sk-new")
+            self.app.api_key_var.set("sk-typed")
+            self.assertEqual(self.app._resolve_api_key(), "sk-typed")

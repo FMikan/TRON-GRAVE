@@ -71,7 +71,9 @@ LEGACY_SETTINGS_PATH = Path.home() / ".config" / "tron-grave" / "ui.json"
 def load_settings(path: Path, legacy: Path | None = None) -> dict:
     """The saved settings, moving a file older versions left in ~/.config on first use."""
     legacy = legacy or LEGACY_SETTINGS_PATH
-    if not path.exists() and legacy != path and legacy.exists():
+    # os.path.exists never raises; older Pythons' Path.exists re-raises PermissionError for a
+    # folder it cannot enter, and that must not keep the window from opening.
+    if not os.path.exists(path) and legacy != path and os.path.exists(legacy):
         data = _read_json(legacy)
         if data:
             try:
@@ -97,7 +99,13 @@ def write_settings(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(data, f)
-    os.chmod(tmp, 0o600)   # O_CREAT's mode only applies when the file is new
-    os.replace(tmp, path)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            # O_CREAT's mode only applies when the file is new, so tighten a leftover one
+            # before any of the key is written to it.
+            os.chmod(tmp, 0o600)
+            json.dump(data, f)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)   # never leave a half-written copy of the key behind
+        raise

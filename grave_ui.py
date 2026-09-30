@@ -522,9 +522,10 @@ class App:
     def _resolve_api_key(self) -> str:
         key = self.api_key_var.get().strip()
         if not key:
-            # Read .env without loading it into os.environ, which every child process inherits.
-            key = (dotenv_values(PROJECT_DIR / ".env").get("ANTHROPIC_API_KEY")
-                   or os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+            # An exported variable beats .env, as it does for the command-line extractor. .env is
+            # read without loading it into os.environ, which every child process inherits.
+            key = (os.environ.get("ANTHROPIC_API_KEY")
+                   or dotenv_values(PROJECT_DIR / ".env").get("ANTHROPIC_API_KEY") or "").strip()
         return key
 
     def _launch_subprocess(self, cmd: list[str]):

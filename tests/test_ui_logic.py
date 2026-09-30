@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import stat
@@ -80,7 +81,39 @@ class SettingsTests(unittest.TestCase):
             os.umask(old)
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
+    @unittest.skipIf(sys.platform == "win32", "POSIX permissions")
+    def test_a_leftover_temp_file_is_locked_down_before_the_key_lands(self):
+        path = self.tmp / "cfg" / "ui.json"
+        path.parent.mkdir()
+        leftover = path.with_name("ui.json.tmp")
+        leftover.write_text("stale", encoding="utf-8")
+        os.chmod(leftover, 0o644)
+        modes = []
+        real_dump = json.dump
+
+        def dump_and_note_mode(data, f):
+            modes.append(stat.S_IMODE(os.fstat(f.fileno()).st_mode))
+            real_dump(data, f)
+
+        with mock.patch.object(ui_logic.json, "dump", dump_and_note_mode):
+            ui_logic.write_settings(path, {"api_key": "k"})
+        self.assertEqual(modes, [0o600])
+
+    def test_a_failed_write_leaves_no_temp_file_and_the_old_settings(self):
+        path = self.tmp / "ui.json"
+        ui_logic.write_settings(path, {"output": "/old"})
+        with mock.patch.object(ui_logic.os, "replace", side_effect=PermissionError("locked")):
+            with self.assertRaises(OSError):
+                ui_logic.write_settings(path, {"output": "/new"})
+        self.assertEqual([p.name for p in self.tmp.iterdir()], ["ui.json"])
+        self.assertEqual(ui_logic.load_settings(path, self.tmp / "none.json"), {"output": "/old"})
+
     def test_a_damaged_file_reads_as_empty(self):
         path = self.tmp / "ui.json"
         path.write_text("[1, 2", encoding="utf-8")
         self.assertEqual(ui_logic.load_settings(path, self.tmp / "none.json"), {})
+
+    def test_an_unreadable_config_folder_reads_as_empty(self):
+        # older Pythons re-raise PermissionError from Path.exists() for a folder they cannot enter
+        with mock.patch.object(Path, "exists", side_effect=PermissionError):
+            self.assertEqual(ui_logic.load_settings(self.tmp / "ui.json", self.tmp / "none.json"), {})
