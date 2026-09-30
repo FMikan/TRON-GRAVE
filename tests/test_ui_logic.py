@@ -214,3 +214,22 @@ class SameDirTests(unittest.TestCase):
         # the typed case: the filesystem's own answer has to decide.
         with mock.patch.object(ui_logic.os.path, "samefile", return_value=True):
             self.assertTrue(ui_logic.same_dir(self.tmp / "out" / "elsewhere", self.tmp / "out" / "byhand"))
+
+
+class EstimateTests(unittest.TestCase):
+    def test_the_fallback_counts_the_image_tokens(self):
+        cost, secs, measured = ui_logic.estimate({}, "claude-sonnet-5", "high", 100)
+        self.assertFalse(measured)
+        self.assertGreater(cost / 100, 4_700 * 2 / 1_000_000)   # the photo alone on Sonnet 5
+        self.assertEqual(secs, 100 * ui_logic.SECS_PER_IMAGE_GUESS)
+
+    def test_measured_runs_take_over(self):
+        stats = ui_logic.record_run({}, "claude-opus-5-5", "high", cost=3.0, secs=600.0, n=60)
+        self.assertEqual(ui_logic.estimate(stats, "claude-opus-5-5", "high", 10), (0.5, 100.0, True))
+
+    def test_an_empty_run_teaches_nothing(self):
+        self.assertEqual(ui_logic.record_run({}, "claude-sonnet-5", "high", 0.0, 5.0, 0), {})
+
+    def test_hand_edited_stats_fall_back_quietly(self):
+        stats = {"claude-sonnet-5|high": {"cost": "x", "secs": 1, "n": 2}}
+        self.assertFalse(ui_logic.estimate(stats, "claude-sonnet-5", "high", 1)[2])

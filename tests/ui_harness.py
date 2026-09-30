@@ -29,6 +29,8 @@ class AppCase(unittest.TestCase):
                         for name in ("showinfo", "showwarning", "showerror", "askyesno", "askyesnocancel")}
         self._patch(grave_ui.App, "_notify_done", mock.Mock())
         self._patch(grave_ui.App, "_show_summary_popup", mock.Mock())
+        self._patch(grave_ui.App, "_ask_existing_output", mock.Mock(side_effect=AssertionError(
+            "unexpected Nastavi/Prepiši/Odustani dialog: patch _ask_existing_output in this test")))
         self.launched = []
         self._patch(grave_ui.App, "_launch_subprocess", lambda app, cmd: self.launched.append(cmd))
         self._patch(grave_ui.ui_logic, "LEGACY_SETTINGS_PATH", self.tmp / "legacy" / "ui.json")

@@ -20,7 +20,7 @@ from dotenv import dotenv_values
 
 import ui_logic
 from extractor.csv_writer import read_processed, resume_problem
-from extractor.file_utils import is_supported_image
+from extractor.file_utils import is_heic, is_supported_image
 from _version import __version__
 
 
@@ -37,18 +37,6 @@ LOG_LINE_CAP = 5000
 LOG_TRIM_BATCH = 500
 DRAIN_CAP_PER_TICK = 200
 MAX_LINE_CHARS = 4096
-SECS_PER_IMAGE_GUESS = 4
-
-# Rough per-image cost estimate for the pre-run preview only (the live counter during
-# a run uses the real cost the extractor reports). Figures are scaled from a measured
-# Opus average by per-token price. All three models run adaptive thinking by default,
-# so the real cost may land above these figures — especially at xhigh/max effort.
-COST_PER_IMAGE_BY_MODEL = {
-    "claude-fable-5":  0.050,
-    "claude-opus-5":   0.025,
-    "claude-sonnet-5": 0.006,
-}
-_DEFAULT_COST_PER_IMAGE_ESTIMATE = 0.01
 
 
 class App:
@@ -75,6 +63,7 @@ class App:
         self.log_queue: queue.Queue = queue.Queue()
         self.line_count = 0
         self.run_start_time: float | None = None
+        self._last_result_time: float | None = None
         self.last_total: int | None = None
         self.counters = {"ok": 0, "partial": 0, "failed": 0}
         self.total_cost = 0.0
@@ -83,6 +72,8 @@ class App:
         self._search_index = "1.0"
         self._is_retry_run = False
         self._run_out_dir: Path | None = None
+        self._run_model = ui_logic.DEFAULT_MODEL
+        self._run_effort = ui_logic.DEFAULT_EFFORT
         self._stop_requested = False
         self._launched_dry_run = False
         self._saw_done_line = False
@@ -332,6 +323,7 @@ class App:
 
     def _on_effort_change(self, _event=None):
         self._save_settings()
+        self._refresh_preview()
 
     def _on_model_change(self, _event=None):
         self._refresh_effort_options()
@@ -369,25 +361,27 @@ class App:
             self.preview_var.set("")
             return
         p = Path(in_path)
-        if not p.is_dir():
+        # os.path.isdir never raises; Path.is_dir re-raises PermissionError on Python <= 3.12
+        # for a folder under one it cannot enter, and this runs from __init__.
+        if not os.path.isdir(p):
             self.preview_var.set("Ulazna mapa ne postoji.")
             return
         try:
-            count = sum(1 for f in p.iterdir() if f.is_file() and is_supported_image(f))
+            files = [f for f in p.iterdir() if f.is_file()]
         except OSError as e:
             self.preview_var.set(f"Ne mogu pročitati ulaznu mapu: {e}")
             return
+        count = sum(1 for f in files if is_supported_image(f))
+        heic = sum(1 for f in files if is_heic(f))
+        heic_note = f" Preskočeno HEIC/HEIF datoteka: {heic} (pretvorite ih u JPG)." if heic else ""
         if count == 0:
-            self.preview_var.set("Nema podržanih slika (.jpg/.jpeg/.png/.webp).")
+            self.preview_var.set("Nema podržanih slika (.jpg/.jpeg/.png/.webp)." + heic_note)
             return
-        est_min = max(1, round(count * SECS_PER_IMAGE_GUESS / 60))
-        cost_per_image = COST_PER_IMAGE_BY_MODEL.get(
-            self._model_id(), _DEFAULT_COST_PER_IMAGE_ESTIMATE
-        )
-        est_cost = count * cost_per_image
-        self.preview_var.set(
-            f"Pronađeno slika: {count}. Procjena: ~{est_min} min, ~${est_cost:.2f} za API."
-        )
+        cost, secs, measured = ui_logic.estimate(self._settings.get("stats"), self._model_id(),
+                                                 self._effort_id(), count)
+        basis = "prema prošlim obradama" if measured else "gruba procjena"
+        self.preview_var.set(f"Pronađeno slika: {count}. Procjena: ~{self._fmt_duration(secs)}, "
+                             f"~${cost:.2f} ({basis}).{heic_note}")
 
     def _refresh_retry_button(self):
         """Ground-truth check: enable "Ponovi byhand/" only if byhand/ actually has images."""
@@ -617,6 +611,7 @@ class App:
             cmd.append("--resume")
         self._is_retry_run = retry
         self._run_out_dir = out_dir
+        self._run_model, self._run_effort = model, effort
         self._launched_dry_run = False
         self._launch_subprocess(cmd)
 
@@ -786,6 +781,7 @@ class App:
                 self._update_progress(k - 1, total, current=name)
             elif event:
                 _, k, total, verdict, total_cost = event
+                self._last_result_time = time.monotonic()
                 if total_cost is not None:
                     self.total_cost = total_cost
                 self.counters[{"OK": "ok", "PARTIAL": "partial"}.get(verdict, "failed")] += 1
@@ -806,6 +802,20 @@ class App:
 
     def _last_error_line(self) -> str:
         return self._last_stderr or "Pojedinosti su u zapisniku ispod."
+
+    def _record_stats(self):
+        """Teach the estimate: add this run's cost and time to its model/effort sums."""
+        n = sum(self.counters.values())
+        if n <= 0 or self.run_start_time is None or self._last_result_time is None:
+            return
+        # Timed to the last result line, not to the process exit: a Stop in the middle of a
+        # photo, or the wait for the process to end, is not photo time.
+        self._settings["stats"] = ui_logic.record_run(
+            self._settings.get("stats"), self._run_model, self._run_effort,
+            self.total_cost, self._last_result_time - self.run_start_time, n,
+        )
+        self._save_settings()
+        self._refresh_preview()
 
     def _report_callback_exception(self, exc_type, exc, tb):
         """Show errors from Tk callbacks: the windowed exe has no console to print them to."""
@@ -882,6 +892,10 @@ class App:
         self._run_out_dir = None
         self._set_running(False)
         self._release_lock()
+        # Only a finished or a stopped run teaches the estimate: a failed or killed one ends on
+        # errors (an api-down run, on three retried unbilled photos) that skew both averages.
+        if not is_dry and outcome in ("done", "stopped"):
+            self._record_stats()
 
         # The results exist whatever the exit code was; never leave them behind dead buttons.
         main_dir = Path(self.output_var.get()) if self.output_var.get() else None
@@ -1035,6 +1049,7 @@ class App:
         self._set_running(True)
         self._is_retry_run = True
         self._run_out_dir = retry_out
+        self._run_model, self._run_effort = ui_logic.RETRY_MODEL, ui_logic.RETRY_EFFORT
         self._launched_dry_run = False
 
         cmd = [
@@ -1104,6 +1119,7 @@ class App:
         self.total_cost = 0.0
         self.last_total = None
         self.run_start_time = None
+        self._last_result_time = None
         self._stop_requested = False
         self._saw_done_line = False
         self._last_stderr = ""

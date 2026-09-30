@@ -338,3 +338,90 @@ class CallbackErrorTests(AppCase):
         self.assertEqual(title, "Obrada nije uspjela")
         self.assertIn("naplat", body)
         self.assertIn("Nastavi", body)
+
+
+class EstimateAppTests(AppCase):
+    def saved(self) -> dict:
+        return json.loads(self.settings_path.read_text(encoding="utf-8")) if self.settings_path.exists() else {}
+
+    def feed(self, *lines):
+        for line in lines:
+            self.app._handle_line("stdout", line + "\n")
+
+    def test_the_preview_counts_skipped_heic_and_labels_its_estimate(self):
+        inp = self.tmp / "in"
+        inp.mkdir()
+        for name in ("a.jpg", "b.HEIC", "._c.jpg"):
+            (inp / name).write_bytes(b"x")
+        self.app.input_var.set(str(inp))
+        self.app._refresh_preview()
+        text = self.app.preview_var.get()
+        self.assertIn("Pronađeno slika: 1.", text)
+        self.assertIn("Preskočeno HEIC/HEIF datoteka: 1", text)
+        self.assertIn("gruba procjena", text)
+
+    def test_a_finished_run_teaches_the_estimate(self):
+        self.app._reset_run_state()
+        self.app._run_model, self.app._run_effort = "claude-sonnet-5", "high"
+        for line in ("[1/2] Processing a.jpg ...", "[1/2] OK: a.jpg (1 record) — $0.2500 (total: $0.25)",
+                     "[2/2] Processing b.jpg ...", "[2/2] OK: b.jpg (1 record) — $0.2500 (total: $0.50)",
+                     "Done. 2 images processed. 2 succeeded, 0 partial, 0 failed."):
+            self.app._handle_line("stdout", line + "\n")
+        self.app._on_proc_exit(0)
+        entry = json.loads(self.settings_path.read_text(encoding="utf-8"))["stats"]["claude-sonnet-5|high"]
+        self.assertEqual(entry["n"], 2)
+        self.assertAlmostEqual(entry["cost"], 0.50)
+
+    def test_changing_the_effort_refreshes_the_preview(self):
+        with mock.patch.object(grave_ui.App, "_refresh_preview") as refresh:
+            self.app._on_effort_change()
+        refresh.assert_called_once()
+
+    def test_a_folder_that_cannot_be_checked_reads_as_missing(self):
+        # Path.is_dir() raises PermissionError on Python <= 3.12 for a path under an unreadable
+        # parent, and the preview refreshes from __init__: that must not keep the window from opening.
+        self.app.input_var.set(str(self.tmp / "locked" / "in"))
+        with mock.patch.object(Path, "is_dir", side_effect=PermissionError(13, "denied")):
+            self.app._refresh_preview()
+        self.assertEqual(self.app.preview_var.get(), "Ulazna mapa ne postoji.")
+
+    def test_a_run_that_ended_on_an_error_teaches_nothing(self):
+        for rc in (1, -9):          # failed, and killed without a Stop click
+            with self.subTest(rc=rc):
+                self.app._reset_run_state()
+                self.feed("[1/9] Processing a.jpg ...", "[1/9] FAILED: a.jpg (API call failed)")
+                self.app._on_proc_exit(rc)
+                self.assertNotIn("stats", self.saved())
+                self.assertNotIn("stats", self.app._settings)
+
+    def test_a_stopped_run_is_timed_to_its_last_result_not_to_the_exit(self):
+        clock = [100.0]
+        self.app._reset_run_state()
+        self.app._run_model, self.app._run_effort = "claude-opus-5-5", "max"
+        with mock.patch.object(grave_ui.time, "monotonic", lambda: clock[0]):
+            self.feed("[1/3] Processing a.jpg ...")
+            clock[0] = 110.0
+            self.feed("[1/3] OK: a.jpg (1 record) — $0.2500 (total: $0.25)")
+            self.app._stop_requested = True
+            clock[0] = 500.0
+            self.app._on_proc_exit(130)
+        entry = self.saved()["stats"]["claude-opus-5-5|max"]
+        self.assertEqual((entry["n"], entry["secs"]), (1, 10.0))
+
+
+class RunModelTests(RunCase):
+    """The estimate files a run under _run_model/_run_effort, so every launch must set them."""
+
+    def test_a_run_is_filed_under_the_model_and_effort_it_launched_with(self):
+        self.app.model_var.set(ui_logic.MODEL_LABELS["claude-opus-5"])
+        self.app.effort_var.set(ui_logic.EFFORT_LABELS["max"])
+        self.app._on_start()
+        self.assertEqual((self.app._run_model, self.app._run_effort), ("claude-opus-5", "max"))
+
+    def test_a_byhand_retry_is_filed_under_the_retry_model(self):
+        byhand = self.out / "byhand"
+        byhand.mkdir(parents=True)
+        (byhand / "p_1_x.jpg").write_bytes(jpeg_bytes())
+        self.app._on_retry_byhand()
+        self.assertEqual((self.app._run_model, self.app._run_effort),
+                         (ui_logic.RETRY_MODEL, ui_logic.RETRY_EFFORT))

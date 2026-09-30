@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 
 from extractor.csv_writer import read_csv
+from extractor.pricing import DEFAULT_PRICING, MODEL_PRICING
 
 # Weakest to strongest: "Ponovi byhand/" never steps down this list.
 MODELS = [
@@ -226,3 +227,46 @@ def explain_failure(stderr_line: str) -> str | None:
     """A Croatian explanation of the extractor's tagged fatal error, if the line has a tag."""
     m = FATAL_TAG_RE.match(stderr_line or "")
     return FATAL_EXPLANATIONS.get(m.group(1)) if m else None
+
+
+# ---- estimates -----------------------------------------------------------------------
+
+IMAGE_TOKENS_GUESS = 4_700      # a phone photo after the API's own downscale (<=4,784 tokens)
+TEXT_TOKENS_GUESS = 400
+PROMPT_TOKENS_GUESS = 4_500     # the cached system prompt, read at the cache-read rate
+OUTPUT_TOKENS_GUESS = 1_500
+SECS_PER_IMAGE_GUESS = 20
+
+
+def fallback_cost_per_image(model: str) -> float:
+    input_rate, output_rate, cache_read_rate = MODEL_PRICING.get(model, DEFAULT_PRICING)
+    return ((IMAGE_TOKENS_GUESS + TEXT_TOKENS_GUESS) * input_rate
+            + PROMPT_TOKENS_GUESS * input_rate * cache_read_rate
+            + OUTPUT_TOKENS_GUESS * output_rate) / 1_000_000
+
+
+def estimate(stats, model: str, effort: str, count: int) -> tuple[float, float, bool]:
+    """(USD, seconds, measured) for `count` photos: past runs' averages when there are any."""
+    entry = stats.get(f"{model}|{effort}") if isinstance(stats, dict) else None
+    try:
+        if entry and entry["n"] > 0:
+            return count * entry["cost"] / entry["n"], count * entry["secs"] / entry["n"], True
+    except (KeyError, TypeError, ZeroDivisionError):
+        pass   # a hand-edited settings file: fall back to the rough guess
+    return count * fallback_cost_per_image(model), count * SECS_PER_IMAGE_GUESS, False
+
+
+def record_run(stats, model: str, effort: str, cost: float, secs: float, n: int) -> dict:
+    """Stats with one run of n photos added to its model/effort running sums."""
+    stats = dict(stats) if isinstance(stats, dict) else {}
+    if n <= 0:
+        return stats
+    key = f"{model}|{effort}"
+    entry = stats.get(key) if isinstance(stats.get(key), dict) else {}
+    try:
+        stats[key] = {"cost": float(entry.get("cost", 0.0)) + cost,
+                      "secs": float(entry.get("secs", 0.0)) + secs,
+                      "n": int(entry.get("n", 0)) + n}
+    except (TypeError, ValueError):
+        stats[key] = {"cost": cost, "secs": secs, "n": n}
+    return stats
