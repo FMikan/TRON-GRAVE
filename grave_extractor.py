@@ -5,22 +5,26 @@ import argparse
 import os
 import signal
 import sys
+import time
 from pathlib import Path
 
 import anthropic
 from dotenv import load_dotenv
 
 from extractor.csv_writer import (
-    append_rows, init_csv, init_processed, mark_processed, read_processed,
+    append_rows, check_writable, init_csv, init_processed, mark_processed, read_processed,
 )
 from extractor.file_utils import copy_to_byhand, extract_id, is_supported_image
-from extractor.image_processor import process_image
+from extractor.image_processor import ImageResult, failure_row, process_image
 
 
 DEFAULT_MODEL = "claude-sonnet-5"
 # Consecutive API failures that end the run: an account-level problem (spend limit, billing,
 # outage) fails every image the same way, and carrying on would only log blank rows.
 MAX_CONSECUTIVE_API_FAILURES = 3
+# How long to wait out a locked output.csv (Excel on Windows) before stopping: 15 x 2 s.
+CSV_LOCK_RETRIES = 15
+CSV_LOCK_POLL_SECS = 2
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,6 +56,21 @@ def discover_images(input_dir: Path) -> list[Path]:
 def fatal(msg: str, tag: str | None = None) -> None:
     print(f"error: [{tag}] {msg}" if tag else f"error: {msg}", file=sys.stderr)
     sys.exit(1)
+
+
+def write_rows(output_csv: Path, rows: list[list]) -> None:
+    """Append rows, waiting out a lock (Excel on Windows) for up to 30 s before giving up."""
+    for attempt in range(CSV_LOCK_RETRIES + 1):
+        try:
+            append_rows(output_csv, rows)
+            return
+        except OSError as e:
+            if attempt == CSV_LOCK_RETRIES:
+                fatal(f"Cannot write to {output_csv} ({e}). Close it (e.g. in Excel) and resume.", "csv-locked")
+            if attempt == 0:
+                print(f"warning: {output_csv} is locked (open in Excel?) — close it; retrying for "
+                      f"{CSV_LOCK_RETRIES * CSV_LOCK_POLL_SECS} s", file=sys.stderr, flush=True)
+            time.sleep(CSV_LOCK_POLL_SECS)
 
 
 def main() -> int:
@@ -122,7 +141,22 @@ def main() -> int:
         if args.verbose:
             print(f"[{idx}/{total}] Processing {img.name} ... ", end="", flush=True)
 
-        result = process_image(client, model, img, record_id, args.effort, extra_tags)
+        # Excel on Windows locks output.csv while it is open: find out before paying for a call.
+        try:
+            check_writable(output_csv)
+        except OSError as e:
+            if args.verbose:
+                print("FAILED (output.csv is locked)")
+            fatal(f"Cannot write to {output_csv} ({e}). Close it (e.g. in Excel) and resume.", "csv-locked")
+
+        try:
+            result = process_image(client, model, img, record_id, args.effort, extra_tags)
+        except Exception as e:  # one bad photo must not end the whole batch
+            result = ImageResult(
+                status="total_failure",
+                rows=[failure_row(record_id, "neočekivana greška", extra_tags, img.name)],
+                reason=f"{type(e).__name__}: {e}",
+            )
         total_cost += result.cost
         cost_suffix = f" — ${result.cost:.4f} (total: ${total_cost:.2f})" if result.billed else ""
 
@@ -144,7 +178,16 @@ def main() -> int:
         if not matched:
             had_any_issue = True
 
-        append_rows(output_csv, result.rows)
+        write_rows(output_csv, result.rows)
+
+        # An API failure is not a review case: resume retries it, and a copy here would
+        # have the retry button pay a stronger model to re-send it.
+        if result.status != "full_success" and not result.api_failure:
+            try:
+                copy_to_byhand(img, byhand_dir)
+                byhand_count += 1
+            except OSError as e:
+                print(f"warning: could not copy {img.name} to byhand/: {e}", file=sys.stderr)
 
         # A failed image still gets a row, so only count it done once something was
         # actually read off the stone -- otherwise resume would skip what needs retrying.
@@ -157,18 +200,11 @@ def main() -> int:
                 n = len(result.rows)
                 print(f"OK ({n} record{'s' if n != 1 else ''}){cost_suffix}")
         elif result.status == "partial_success":
-            copy_to_byhand(img, byhand_dir)
-            byhand_count += 1
             partial += 1
             had_any_issue = True
             if args.verbose:
                 print(f"PARTIAL ({result.reason}){cost_suffix}")
         else:
-            # An API failure is not a review case: resume retries it, and a copy here would
-            # have the retry button pay a stronger model to re-send it.
-            if not result.api_failure:
-                copy_to_byhand(img, byhand_dir)
-                byhand_count += 1
             failed += 1
             had_any_issue = True
             if args.verbose:

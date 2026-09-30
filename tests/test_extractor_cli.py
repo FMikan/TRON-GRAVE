@@ -3,12 +3,14 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
 import grave_extractor
-from extractor.csv_writer import read_csv
+from extractor import image_processor
+from extractor.csv_writer import read_csv, read_processed
 from tests.helpers import FakeClient, answer, api_error, jpeg_bytes, message, record
 
 
@@ -78,3 +80,62 @@ class FatalErrorTests(CliCase):
             self.add_image(f"p_{i}_x.jpg")
         code, _, _, client = self.run_cli(api_error(400), api_error(400), message(answer(record())), api_error(400))
         self.assertEqual((code, len(client.calls)), (2, 4))
+
+
+class RobustnessTests(CliCase):
+    def test_an_unexpected_error_on_one_photo_does_not_end_the_run(self):
+        self.add_image("p_1_x.jpg")
+        self.add_image("p_2_x.jpg")
+        real_prepare = image_processor.prepare_image
+        calls = []
+
+        def flaky(raw):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("boom")
+            return real_prepare(raw)
+
+        with mock.patch.object(image_processor, "prepare_image", side_effect=flaky):
+            code, _, _, client = self.run_cli(message(answer(record())))
+        self.assertEqual((code, len(client.calls)), (2, 1))
+        self.assertEqual([r[5] for r in self.rows()], ["neočekivana greška", ""])
+
+    def test_a_locked_csv_stops_the_run_before_paying(self):
+        self.add_image("p_1_x.jpg")
+        with mock.patch.object(grave_extractor, "check_writable", side_effect=PermissionError("locked")):
+            code, _, err, client = self.run_cli(message(answer(record())))
+        self.assertEqual((code, client.calls), (1, []))
+        self.assertIn("[csv-locked]", err)
+
+    def test_a_lock_that_appears_mid_run_is_waited_out(self):
+        self.add_image("p_1_x.jpg")
+        real_append = grave_extractor.append_rows
+        calls = []
+
+        def flaky(path, rows):
+            calls.append(1)
+            if len(calls) == 1:
+                raise PermissionError("locked")
+            real_append(path, rows)
+
+        with mock.patch.object(grave_extractor, "append_rows", side_effect=flaky):
+            code, _, err, _ = self.run_cli(message(answer(record())))
+        self.assertEqual(code, 0)
+        self.assertIn("locked", err)
+        self.assertEqual(len(self.rows()), 1)
+
+    def test_a_lock_that_never_lifts_stops_the_run_after_30_seconds(self):
+        self.add_image("p_1_x.jpg")
+        with mock.patch.object(grave_extractor, "append_rows", side_effect=PermissionError("locked")):
+            code, _, err, _ = self.run_cli(message(answer(record())))
+        self.assertEqual(code, 1)
+        self.assertIn("[csv-locked]", err)
+        self.assertEqual(time.sleep.call_args_list, [mock.call(2)] * 15)
+
+    def test_a_failed_byhand_copy_is_only_a_warning(self):
+        self.add_image("p_1_x.jpg")
+        with mock.patch.object(grave_extractor, "copy_to_byhand", side_effect=OSError("disk full")):
+            code, _, err, _ = self.run_cli(message(answer(record(name=None))))
+        self.assertEqual(code, 2)
+        self.assertIn("could not copy p_1_x.jpg", err)
+        self.assertIn("p_1_x.jpg", read_processed(self.out))
