@@ -10,6 +10,7 @@ from unittest import mock
 import grave_ui
 
 REAL_SHOW_SUMMARY = grave_ui.App._show_summary_popup
+REAL_LAUNCH_SUBPROCESS = grave_ui.App._launch_subprocess
 
 
 class AppCase(unittest.TestCase):

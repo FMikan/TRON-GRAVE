@@ -683,6 +683,7 @@ class App:
         except OSError as e:
             self._append_log(f"Ne mogu pokrenuti obradu: {e}\n", "stderr")
             self._set_running(False)
+            self._refresh_output_buttons()      # _set_running(False) leaves Open and Retry off
             self.status_var.set("Pokretanje nije uspjelo.")
             self._release_lock()
             return
@@ -1018,7 +1019,9 @@ class App:
                 win.grab_set()
             except tk.TclError:
                 pass   # not mapped yet, or already closed: the popup works without a grab
-        win.after(100, grab)
+        # On the root, not the popup: a timer the popup owns dies with it (Esc within 100 ms),
+        # and Tk would then open its own error window for the deleted command.
+        self.root.after(100, grab)
         return win
 
     def _on_retry_byhand(self):

@@ -10,7 +10,7 @@ import grave_ui
 import ui_logic
 from extractor.csv_writer import append_rows, init_csv, init_processed, mark_processed
 from tests.helpers import jpeg_bytes
-from tests.ui_harness import REAL_SHOW_SUMMARY, AppCase
+from tests.ui_harness import REAL_LAUNCH_SUBPROCESS, REAL_SHOW_SUMMARY, AppCase
 
 
 class LabelTests(AppCase):
@@ -136,6 +136,20 @@ class LockAndDryRunTests(RunCase):
         self.lock().write_text("other:token", encoding="utf-8")
         self.app._on_proc_exit(0)
         self.assertTrue(self.lock().exists())
+
+
+class LaunchFailureTests(RunCase):
+    def test_a_launch_that_fails_leaves_the_buttons_as_the_disk_has_them(self):
+        (self.out / "byhand").mkdir(parents=True)
+        (self.out / "byhand" / "p_1_x.jpg").write_bytes(jpeg_bytes())
+        init_csv(self.out / "output.csv")
+        with mock.patch.object(grave_ui.App, "_ask_existing_output", return_value="resume"), \
+                mock.patch.object(grave_ui.App, "_launch_subprocess", REAL_LAUNCH_SUBPROCESS), \
+                mock.patch.object(grave_ui.subprocess, "Popen", side_effect=OSError("no interpreter")):
+            self.app._on_start()                    # _set_running(True) greys the three buttons out
+        self.assertEqual(self.app.status_var.get(), "Pokretanje nije uspjelo.")
+        self.assertEqual([str(button.cget("state")) for button in (
+            self.app.btn_open_csv, self.app.btn_open_byhand, self.app.btn_retry_byhand)], ["normal"] * 3)
 
 
 class ProgressTests(AppCase):
@@ -687,6 +701,9 @@ class OutputButtonTests(AppCase):
 
 
 class SummaryTests(AppCase):
+    def pending_timers(self) -> set[str]:
+        return set(self.root.tk.splitlist(self.root.tk.call("after", "info")))
+
     def test_the_summary_lists_this_runs_reasons_and_opens_its_csv(self):
         csv_path = self.tmp / "output.csv"
         init_csv(csv_path)
@@ -713,3 +730,24 @@ class SummaryTests(AppCase):
         open_path.assert_called_once_with(csv_path)
         self.assertTrue(win.bind("<Escape>"))
         self.assertTrue(win.bind("<Return>"))
+
+    def test_a_summary_closed_at_once_leaves_no_timer_on_a_deleted_command(self):
+        # The grab timer waits 100 ms. A timer the popup owns is deleted with it, and when it then
+        # fires Tk opens its own "Application Error" window. So close the popup and fire its timers
+        # by hand, as Tcl does when they expire: no waiting, and no event loop that would show a
+        # window or run the timers other tests left behind.
+        csv_path = self.tmp / "output.csv"
+        init_csv(csv_path)
+        before = self.pending_timers()
+        win = REAL_SHOW_SUMMARY(self.app, csv_path, "Sažetak obrade")
+        win.withdraw()
+        timers = self.pending_timers() - before
+        next(w for w in win.winfo_children()[0].winfo_children()
+             if isinstance(w, ttk.Button) and w.cget("text") == "Zatvori").invoke()
+        for timer in timers:
+            script, kind = self.root.tk.splitlist(self.root.tk.call("after", "info", timer))
+            if kind == "timer":
+                try:
+                    self.root.tk.eval(script)
+                except tk.TclError as e:
+                    self.fail(f"the popup's timer fires on a deleted command: {e}")
