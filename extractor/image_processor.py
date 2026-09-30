@@ -396,10 +396,14 @@ def prepare_image(raw: bytes) -> tuple[bytes, str]:
         scale = min(1.0, MAX_LONG_EDGE / max(width, height), math.sqrt(MAX_PIXELS / (width * height)))
         if fmt in ("JPEG", "MPO") and scale < 0.5:
             img.draft("RGB", (math.ceil(width * scale), math.ceil(height * scale)))
-        orientation = img.getexif().get(_EXIF_ORIENTATION, 1)
         img.load()
     except Exception as e:  # Pillow raises many different types for bad input
         raise ImageUnreadable(str(e) or type(e).__name__) from e
+
+    try:
+        orientation = img.getexif().get(_EXIF_ORIENTATION, 1)
+    except Exception:  # a broken EXIF block says nothing about the pixels, which decoded fine
+        orientation = 1
 
     if (scale == 1.0 and orientation in (None, 1) and img.mode in _SENDABLE_MODES
             and fmt in _MEDIA_TYPES and len(raw) <= MAX_SEND_BYTES):

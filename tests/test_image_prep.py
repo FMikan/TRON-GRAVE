@@ -1,14 +1,22 @@
+import io
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
-from PIL import ImageStat
+from PIL import Image, ImageStat
 
 from extractor.image_processor import (
     MAX_LONG_EDGE, MAX_PIXELS, ImageUnreadable, prepare_image, process_image,
 )
 from tests.helpers import decode, jpeg_bytes, png16_bytes, webp_bytes
+
+
+def _with_bad_exif(fmt, size=(400, 300), **save_kwargs) -> bytes:
+    """A photo whose pixels are fine but whose EXIF block has no valid TIFF header."""
+    buf = io.BytesIO()
+    Image.new("RGB", size, (200, 200, 200)).save(buf, fmt, exif=b"Exif\x00\x00garbage", **save_kwargs)
+    return buf.getvalue()
 
 
 class PrepareImageTests(unittest.TestCase):
@@ -41,6 +49,21 @@ class PrepareImageTests(unittest.TestCase):
     def test_non_image_is_unreadable(self):
         with self.assertRaises(ImageUnreadable):
             prepare_image(b"\x00\x05\x16\x07 Mac OS X        ATTR")
+
+    def test_malformed_exif_does_not_make_a_photo_unreadable(self):
+        # The JPEG needs a dpi in its header: without one Pillow parses (and swallows) the
+        # bad EXIF while opening the file, and prepare_image never sees the error.
+        for fmt, mime, kwargs in (("JPEG", "image/jpeg", {"dpi": (300, 300)}),
+                                  ("PNG", "image/png", {}), ("WEBP", "image/webp", {})):
+            with self.subTest(fmt):
+                raw = _with_bad_exif(fmt, **kwargs)
+                self.assertEqual(prepare_image(raw), (raw, mime))
+
+    def test_malformed_exif_does_not_stop_a_photo_from_being_shrunk(self):
+        data, mime = prepare_image(_with_bad_exif("JPEG", (3000, 2000), dpi=(300, 300)))
+        w, h = decode(data).size
+        self.assertEqual(mime, "image/jpeg")
+        self.assertLessEqual(w * h, MAX_PIXELS * 1.01)
 
     def test_media_type_comes_from_the_content(self):
         raw = webp_bytes()                                 # e.g. a WebP saved as .jpg
