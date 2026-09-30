@@ -19,6 +19,7 @@ from tkinter.scrolledtext import ScrolledText
 
 from dotenv import load_dotenv
 
+import ui_logic
 from extractor.file_utils import is_supported_image
 from _version import __version__
 
@@ -53,20 +54,6 @@ COST_PER_IMAGE_BY_MODEL = {
 }
 _DEFAULT_COST_PER_IMAGE_ESTIMATE = 0.01
 
-MODELS = [
-    "claude-sonnet-5",
-    "claude-opus-5",
-    "claude-fable-5",
-]
-EFFORT_LEVELS_ALL = ["low", "medium", "high", "xhigh", "max"]
-# Every currently offered model takes all five levels; the table stays per-model so a
-# future model with a narrower range only needs an entry here.
-EFFORT_BY_MODEL = {
-    "claude-fable-5":  ["low", "medium", "high", "xhigh", "max"],
-    "claude-opus-5":   ["low", "medium", "high", "xhigh", "max"],
-    "claude-sonnet-5": ["low", "medium", "high", "xhigh", "max"],
-}
-
 PROGRESS_RE = re.compile(r"^\[(\d+)/(\d+)\]\s")
 # Anchored to the " ... " the extractor prints between the filename and the verdict, so a
 # photo named "OK (west section).jpg" cannot make a FAILED image count as OK.
@@ -87,11 +74,11 @@ class App:
         self.input_var = tk.StringVar()
         self.output_var = tk.StringVar()
         self.api_key_var = tk.StringVar()
-        self.model_var = tk.StringVar(value=MODELS[0])
-        self.effort_var = tk.StringVar(value="high")
+        self.model_var = tk.StringVar(value=ui_logic.MODEL_LABELS[ui_logic.DEFAULT_MODEL])
+        self.effort_var = tk.StringVar(value=ui_logic.EFFORT_LABELS[ui_logic.DEFAULT_EFFORT])
         self.dry_run_var = tk.BooleanVar(value=False)
         self.resume_var = tk.BooleanVar(value=False)
-        self.status_var = tk.StringVar(value="Ready.")
+        self.status_var = tk.StringVar(value="Spremno.")
         self.preview_var = tk.StringVar(value="")
         self.search_var = tk.StringVar()
 
@@ -209,7 +196,7 @@ class App:
             row=0, column=0, sticky="w"
         )
         ttk.Label(
-            header, text="Tombstone inscription extractor",
+            header, text="Izdvajanje podataka s nadgrobnih spomenika",
             font=("Segoe UI", 9), foreground="#9aa0a6",
         ).grid(row=1, column=0, sticky="w")
 
@@ -217,40 +204,40 @@ class App:
         top.grid(row=1, column=0, sticky="ew", padx=14, pady=6)
         top.columnconfigure(1, weight=1)
 
-        ttk.Label(top, text="Input folder").grid(row=0, column=0, sticky="w", padx=6, pady=6)
+        ttk.Label(top, text="Ulazna mapa").grid(row=0, column=0, sticky="w", padx=6, pady=6)
         ttk.Entry(top, textvariable=self.input_var, state="readonly").grid(
             row=0, column=1, sticky="ew", padx=6, pady=6
         )
-        self.btn_in = ttk.Button(top, text="Browse…", command=self._pick_input)
+        self.btn_in = ttk.Button(top, text="Odaberi…", command=self._pick_input)
         self.btn_in.grid(row=0, column=2, padx=6, pady=6)
 
-        ttk.Label(top, text="Output folder").grid(row=1, column=0, sticky="w", padx=6, pady=6)
+        ttk.Label(top, text="Izlazna mapa").grid(row=1, column=0, sticky="w", padx=6, pady=6)
         ttk.Entry(top, textvariable=self.output_var, state="readonly").grid(
             row=1, column=1, sticky="ew", padx=6, pady=6
         )
-        self.btn_out = ttk.Button(top, text="Browse…", command=self._pick_output)
+        self.btn_out = ttk.Button(top, text="Odaberi…", command=self._pick_output)
         self.btn_out.grid(row=1, column=2, padx=6, pady=6)
 
-        ttk.Label(top, text="API Key").grid(row=2, column=0, sticky="w", padx=6, pady=6)
+        ttk.Label(top, text="API ključ").grid(row=2, column=0, sticky="w", padx=6, pady=6)
         ttk.Entry(top, textvariable=self.api_key_var, show="•").grid(
             row=2, column=1, sticky="ew", padx=6, pady=6
         )
-        ttk.Button(top, text="Save", command=self._save_settings).grid(row=2, column=2, padx=6, pady=6)
+        ttk.Button(top, text="Spremi", command=self._save_settings).grid(row=2, column=2, padx=6, pady=6)
 
         ttk.Label(top, text="Model").grid(row=3, column=0, sticky="w", padx=6, pady=6)
         self.model_combo = ttk.Combobox(
             top, textvariable=self.model_var, state="readonly", width=30,
-            values=MODELS,
+            values=[ui_logic.MODEL_LABELS[m] for m in ui_logic.MODELS],
         )
         self.model_combo.grid(row=3, column=1, sticky="w", padx=6, pady=6)
         self.model_combo.bind("<<ComboboxSelected>>", self._on_model_change)
 
-        ttk.Label(top, text="Effort").grid(row=4, column=0, sticky="w", padx=6, pady=6)
+        ttk.Label(top, text="Napor").grid(row=4, column=0, sticky="w", padx=6, pady=6)
         self.effort_combo = ttk.Combobox(
             top, textvariable=self.effort_var, state="readonly", width=30,
         )
         self.effort_combo.grid(row=4, column=1, sticky="w", padx=6, pady=6)
-        self.effort_combo.bind("<<ComboboxSelected>>", lambda _e: self._save_settings())
+        self.effort_combo.bind("<<ComboboxSelected>>", self._on_effort_change)
         self._refresh_effort_options()
 
         ttk.Label(top, textvariable=self.preview_var, foreground="#9aa0a6").grid(
@@ -262,12 +249,12 @@ class App:
         ctrl.columnconfigure(4, weight=1)
 
         self.btn_start = ttk.Button(
-            ctrl, text="▶  Start", command=self._on_start, style="Accent.TButton"
+            ctrl, text="▶  Pokreni", command=self._on_start, style="Accent.TButton"
         )
         self.btn_start.grid(row=0, column=0, padx=(0, 6), pady=4)
-        self.btn_stop = ttk.Button(ctrl, text="Stop", command=self._on_stop, state="disabled")
+        self.btn_stop = ttk.Button(ctrl, text="Zaustavi", command=self._on_stop, state="disabled")
         self.btn_stop.grid(row=0, column=1, padx=6, pady=4)
-        self.chk_dry = ttk.Checkbutton(ctrl, text="Dry run (list only)", variable=self.dry_run_var)
+        self.chk_dry = ttk.Checkbutton(ctrl, text="Probni prolaz (samo popis)", variable=self.dry_run_var)
         self.chk_dry.grid(row=0, column=2, padx=12)
         self.chk_resume = ttk.Checkbutton(
             ctrl, text="Nastavi (preskoči obrađene)", variable=self.resume_var
@@ -275,19 +262,19 @@ class App:
         self.chk_resume.grid(row=0, column=3, padx=(0, 12))
 
         self.btn_open_csv = ttk.Button(
-            ctrl, text="Open output.csv",
+            ctrl, text="Otvori output.csv",
             command=lambda: self._open_path(Path(self.output_var.get()) / "output.csv"),
             state="disabled",
         )
         self.btn_open_csv.grid(row=0, column=5, padx=6)
         self.btn_open_byhand = ttk.Button(
-            ctrl, text="Open byhand/",
+            ctrl, text="Otvori byhand/",
             command=lambda: self._open_path(Path(self.output_var.get()) / "byhand"),
             state="disabled",
         )
         self.btn_open_byhand.grid(row=0, column=6, padx=6)
         self.btn_retry_byhand = ttk.Button(
-            ctrl, text="Retry byhand (Opus)",
+            ctrl, text="Ponovi byhand/",
             command=self._on_retry_byhand,
             state="disabled",
         )
@@ -327,11 +314,11 @@ class App:
         self.log.configure(xscrollcommand=hbar.set)
 
         self.search_frame = ttk.Frame(self.root)
-        ttk.Label(self.search_frame, text="Find:").pack(side="left", padx=(8, 4))
+        ttk.Label(self.search_frame, text="Traži:").pack(side="left", padx=(8, 4))
         self._search_entry = ttk.Entry(self.search_frame, textvariable=self.search_var)
         self._search_entry.pack(side="left", fill="x", expand=True, padx=4)
-        ttk.Button(self.search_frame, text="Next", command=self._search_next).pack(side="left", padx=4)
-        ttk.Button(self.search_frame, text="Close", command=self._hide_search).pack(side="left", padx=(4, 8))
+        ttk.Button(self.search_frame, text="Sljedeće", command=self._search_next).pack(side="left", padx=4)
+        ttk.Button(self.search_frame, text="Zatvori", command=self._hide_search).pack(side="left", padx=(4, 8))
         self._search_entry.bind("<Return>", lambda _e: self._search_next())
 
         self.root.bind("<Control-f>", lambda _e: self._show_search())
@@ -341,10 +328,20 @@ class App:
 
     def _refresh_effort_options(self):
         """Show only the effort levels the selected model accepts, clamping if needed."""
-        valid = EFFORT_BY_MODEL.get(self.model_var.get(), EFFORT_LEVELS_ALL)
-        self.effort_combo.configure(values=valid)
-        if self.effort_var.get() not in valid:
-            self.effort_var.set("high" if "high" in valid else valid[-1])
+        valid = ui_logic.EFFORT_BY_MODEL.get(self._model_id(), ui_logic.EFFORT_LEVELS)
+        self.effort_combo.configure(values=[ui_logic.EFFORT_LABELS[e] for e in valid])
+        if self._effort_id() not in valid:
+            fallback = ui_logic.DEFAULT_EFFORT if ui_logic.DEFAULT_EFFORT in valid else valid[-1]
+            self.effort_var.set(ui_logic.EFFORT_LABELS[fallback])
+
+    def _model_id(self) -> str:
+        return ui_logic.model_id(self.model_var.get())
+
+    def _effort_id(self) -> str:
+        return ui_logic.effort_id(self.effort_var.get())
+
+    def _on_effort_change(self, _event=None):
+        self._save_settings()
 
     def _on_model_change(self, _event=None):
         self._refresh_effort_options()
@@ -355,7 +352,7 @@ class App:
 
     def _pick_input(self):
         d = filedialog.askdirectory(
-            title="Pick input folder",
+            title="Odaberite ulaznu mapu",
             initialdir=self.input_var.get() or str(Path.home()),
         )
         if d:
@@ -365,7 +362,7 @@ class App:
 
     def _pick_output(self):
         d = filedialog.askdirectory(
-            title="Pick output folder",
+            title="Odaberite izlaznu mapu",
             initialdir=self.output_var.get() or str(Path.home()),
         )
         if d:
@@ -383,27 +380,27 @@ class App:
             return
         p = Path(in_path)
         if not p.is_dir():
-            self.preview_var.set("Input folder does not exist.")
+            self.preview_var.set("Ulazna mapa ne postoji.")
             return
         try:
             count = sum(1 for f in p.iterdir() if f.is_file() and is_supported_image(f))
         except OSError as e:
-            self.preview_var.set(f"Cannot read input folder: {e}")
+            self.preview_var.set(f"Ne mogu pročitati ulaznu mapu: {e}")
             return
         if count == 0:
-            self.preview_var.set("Found 0 supported images (.jpg/.jpeg/.png/.webp).")
+            self.preview_var.set("Nema podržanih slika (.jpg/.jpeg/.png/.webp).")
             return
         est_min = max(1, round(count * SECS_PER_IMAGE_GUESS / 60))
         cost_per_image = COST_PER_IMAGE_BY_MODEL.get(
-            self.model_var.get(), _DEFAULT_COST_PER_IMAGE_ESTIMATE
+            self._model_id(), _DEFAULT_COST_PER_IMAGE_ESTIMATE
         )
         est_cost = count * cost_per_image
         self.preview_var.set(
-            f"Found {count} images.  Approx. ~{est_min} min, ~${est_cost:.2f} in API cost."
+            f"Pronađeno slika: {count}. Procjena: ~{est_min} min, ~${est_cost:.2f} za API."
         )
 
     def _refresh_retry_button(self):
-        """Ground-truth check: enable Retry byhand only if byhand/ actually has images."""
+        """Ground-truth check: enable "Ponovi byhand/" only if byhand/ actually has images."""
         out = self.output_var.get()
         if not out:
             self.btn_retry_byhand.configure(state="disabled")
@@ -426,25 +423,25 @@ class App:
         out_path = self.output_var.get().strip()
 
         if not in_path or not out_path:
-            messagebox.showwarning("Missing folder", "Pick both an input and output folder.")
+            messagebox.showwarning("Nedostaje mapa", "Odaberite ulaznu i izlaznu mapu.")
             return
 
         in_dir = Path(in_path)
         out_dir = Path(out_path)
         if not in_dir.is_dir():
-            messagebox.showerror("Bad input", f"Input folder does not exist:\n{in_dir}")
+            messagebox.showerror("Neispravna ulazna mapa", f"Ulazna mapa ne postoji:\n{in_dir}")
             return
 
         try:
             image_count = sum(1 for f in in_dir.iterdir() if f.is_file() and is_supported_image(f))
         except OSError as e:
-            messagebox.showerror("Bad input", f"Cannot read input folder:\n{e}")
+            messagebox.showerror("Neispravna ulazna mapa", f"Ne mogu pročitati ulaznu mapu:\n{e}")
             return
         if image_count == 0:
             messagebox.showwarning(
-                "No images",
-                f"{in_dir}\n\ncontains no supported images (.jpg/.jpeg/.png/.webp).\n\n"
-                "Nothing to process — HEIC/HEIF photos must be converted to JPG first.",
+                "Nema slika",
+                f"{in_dir}\n\nnema podržanih slika (.jpg/.jpeg/.png/.webp).\n\n"
+                "Nema se što obraditi — HEIC/HEIF fotografije treba prvo pretvoriti u JPG.",
             )
             return
 
@@ -452,9 +449,9 @@ class App:
             api_key = self._resolve_api_key()
             if not api_key:
                 messagebox.showerror(
-                    "Missing API key",
-                    "Enter your Anthropic API key in the 'API Key' field above, then click Save.\n\n"
-                    "Get a key at: console.anthropic.com",
+                    "Nedostaje API ključ",
+                    "Upišite svoj Anthropic API ključ u polje „API ključ” iznad pa kliknite Spremi.\n\n"
+                    "Ključ možete dobiti na: console.anthropic.com",
                 )
                 return
             self._api_key = api_key
@@ -463,21 +460,21 @@ class App:
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            messagebox.showerror("Cannot create output", str(e))
+            messagebox.showerror("Ne mogu stvoriti izlaznu mapu", str(e))
             return
 
         lock = out_dir / ".tron-grave.lock"
         if lock.exists():
             if not messagebox.askyesno(
-                "Lockfile present",
-                f"{lock} exists.\n\n"
-                "Another run may already be using this output folder. Take the lock anyway?",
+                "Mapa je zauzeta",
+                f"{lock} postoji.\n\n"
+                "Možda neka druga obrada već koristi ovu izlaznu mapu. Svejedno nastaviti?",
             ):
                 return
         try:
             lock.write_text(str(os.getpid()), encoding="utf-8")
         except OSError as e:
-            messagebox.showerror("Cannot write lockfile", str(e))
+            messagebox.showerror("Ne mogu zaključati izlaznu mapu", str(e))
             return
         self.lockfile_path = lock
 
@@ -488,11 +485,11 @@ class App:
                 # Timestamped so a second overwrite cannot clobber the first backup.
                 backup = out_dir / f"output.{time.strftime('%Y%m%d-%H%M%S')}.bak.csv"
                 choice = messagebox.askyesnocancel(
-                    "output.csv exists",
-                    f"{existing} already exists ({rows} data rows).\n\n"
-                    f"Yes — back up to {backup.name} and overwrite\n"
-                    "No  — overwrite without backup\n"
-                    "Cancel — abort",
+                    "output.csv već postoji",
+                    f"{existing} već postoji (redaka: {rows}).\n\n"
+                    f"Da — spremi kopiju kao {backup.name} i prepiši\n"
+                    "Ne — prepiši bez kopije\n"
+                    "Odustani — prekini",
                 )
                 if choice is None:
                     self._release_lock()
@@ -501,7 +498,7 @@ class App:
                     if choice:
                         existing.replace(backup)
                 except OSError as e:
-                    messagebox.showerror("Cannot rotate files", str(e))
+                    messagebox.showerror("Ne mogu spremiti kopiju", str(e))
                     self._release_lock()
                     return
 
@@ -513,8 +510,8 @@ class App:
             "--input", str(in_dir),
             "--output", str(out_dir),
             "--verbose",
-            "--model", self.model_var.get(),
-            "--effort", self.effort_var.get(),
+            "--model", self._model_id(),
+            "--effort", self._effort_id(),
         ]
         if self.dry_run_var.get():
             cmd.append("--dry-run")
@@ -559,9 +556,9 @@ class App:
                 **popen_extra,
             )
         except OSError as e:
-            self._append_log(f"Failed to launch extractor: {e}\n", "stderr")
+            self._append_log(f"Ne mogu pokrenuti obradu: {e}\n", "stderr")
             self._set_running(False)
-            self.status_var.set("Failed to launch.")
+            self.status_var.set("Pokretanje nije uspjelo.")
             self._release_lock()
             return
 
@@ -589,7 +586,7 @@ class App:
     def _on_stop(self):
         if not self.proc:
             return
-        self._append_log("[stop requested]\n", "info")
+        self._append_log("[zaustavljanje…]\n", "info")
         self._stop_requested = True
         self.btn_stop.configure(state="disabled")
         threading.Thread(target=self._terminate_run, daemon=True).start()
@@ -707,7 +704,7 @@ class App:
         self._append_log(prefix + line, tag)
 
     def _last_error_line(self) -> str:
-        return self._last_stderr or "See the log below for details."
+        return self._last_stderr or "Pojedinosti su u zapisniku ispod."
 
     def _update_progress(self, done: int, total: int):
         if self.last_total != total:
@@ -723,9 +720,9 @@ class App:
         if self.run_start_time and 0 < done < total:
             elapsed = time.monotonic() - self.run_start_time
             remaining = (total - done) * (elapsed / done)
-            eta_str = f" — ETA {self._fmt_duration(remaining)}"
+            eta_str = f" — preostalo ~{self._fmt_duration(remaining)}"
         self.status_var.set(
-            f"{done}/{total} — {ok} OK · {partial} manual · {failed} failed"
+            f"{done}/{total} — {ok} OK · {partial} za pregled · {failed} neuspjelo"
             f" · potrošeno: ${self.total_cost:.2f}{eta_str}"
         )
 
@@ -788,36 +785,35 @@ class App:
         saved = ok + partial + failed
 
         if was_stopped:
-            self.status_var.set(f"Stopped — {saved} image(s) processed.")
+            self.status_var.set(f"Zaustavljeno — obrađeno slika: {saved}.")
             messagebox.showinfo(
-                "Stopped",
-                f"Stopped. {saved} image(s) processed and saved to output.csv.\n\n"
-                "To carry on where this run left off, tick "
-                "\"Nastavi (preskoči obrađene)\" before starting again — "
-                "without it, every processed image is re-sent to the API and paid for twice.",
+                "Zaustavljeno",
+                f"Zaustavljeno. Obrađeno slika: {saved}; spremljeno u output.csv.\n\n"
+                "Za nastavak označite „Nastavi (preskoči obrađene)” prije ponovnog "
+                "pokretanja — inače se sve obrađene slike ponovno šalju API-ju i plaćaju dvaput.",
             )
         # Exit code 2 means "finished with issues", but argparse and the CPython launcher
         # also exit 2 on failures that never processed anything -- so require the
         # extractor's own completion line before believing it.
         elif rc == 0 or (rc == 2 and (is_dry or self._saw_done_line)):
-            self._append_log(f"\n[exit code {rc}]\n", "info")
+            self._append_log(f"\n[izlazni kod {rc}]\n", "info")
             if is_dry:
-                self.status_var.set("Dry run complete.")
+                self.status_var.set("Probni prolaz završen.")
             else:
                 self.status_var.set(
-                    f"Done — {ok} OK · {partial} manual · {failed} failed · ${self.total_cost:.2f}"
+                    f"Gotovo — {ok} OK · {partial} za pregled · {failed} neuspjelo · ${self.total_cost:.2f}"
                 )
                 self._notify_done()
                 self._show_summary_popup(
                     out_dir / "output.csv",
-                    title="Retry sažetak (Opus)" if is_retry else "Sažetak obrade",
+                    title="Sažetak ponovne obrade" if is_retry else "Sažetak obrade",
                 )
         else:
-            self.status_var.set(f"Failed (exit code {rc}).")
-            self._append_log(f"\n[failed, exit code {rc}]\n", "stderr")
+            self.status_var.set(f"Neuspjelo (izlazni kod {rc}).")
+            self._append_log(f"\n[neuspjelo, izlazni kod {rc}]\n", "stderr")
             messagebox.showerror(
-                "Run failed",
-                f"Extractor exited with code {rc}.\n\n{self._last_error_line()}",
+                "Obrada nije uspjela",
+                f"Obrada je završila s izlaznim kodom {rc}.\n\n{self._last_error_line()}",
             )
 
         self.proc = None
@@ -847,7 +843,7 @@ class App:
         )
         ttk.Label(
             frm,
-            text=f"Ukupno: {total}   ·   OK: {ok}   ·   Ručni pregled: {partial}   ·   Neuspjelo: {failed}",
+            text=f"Ukupno: {total}   ·   OK: {ok}   ·   Za pregled: {partial}   ·   Neuspjelo: {failed}",
         ).grid(row=1, column=0, sticky="w")
         ttk.Label(frm, text=f"Ukupni trošak: ${self.total_cost:.2f}").grid(
             row=2, column=0, sticky="w", pady=(2, 10)
@@ -901,18 +897,19 @@ class App:
 
         retry_out = out_dir / "byhand_retry"
         if not messagebox.askyesno(
-            "Retry s Opusom",
-            f"Ponovno obraditi {n} slika iz byhand/ modelom Claude Opus 5?\n\n"
-            "Ovo šalje nove, plaćene API pozive.\n"
-            f"Rezultati idu u zaseban folder: {retry_out}",
+            "Ponovna obrada",
+            f"Ponovno obraditi slike iz byhand/ (ukupno: {n}) modelom "
+            f"{ui_logic.MODEL_LABELS[ui_logic.RETRY_MODEL]}?\n\n"
+            "Ovo su novi, plaćeni API pozivi.\n"
+            f"Rezultati idu u zasebnu mapu: {retry_out}",
         ):
             return
 
         api_key = self._resolve_api_key()
         if not api_key:
             messagebox.showerror(
-                "Missing API key",
-                "Enter your Anthropic API key in the 'API Key' field above, then click Save.",
+                "Nedostaje API ključ",
+                "Upišite svoj Anthropic API ključ u polje „API ključ” iznad pa kliknite Spremi.",
             )
             return
         self._api_key = api_key
@@ -920,7 +917,7 @@ class App:
         try:
             retry_out.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            messagebox.showerror("Cannot create output", str(e))
+            messagebox.showerror("Ne mogu stvoriti izlaznu mapu", str(e))
             return
 
         self._reset_run_state()
@@ -934,8 +931,8 @@ class App:
             "--input", str(byhand_dir),
             "--output", str(retry_out),
             "--verbose",
-            "--model", "claude-opus-5",
-            "--effort", "high",
+            "--model", ui_logic.RETRY_MODEL,
+            "--effort", ui_logic.RETRY_EFFORT,
         ]
         self._launch_subprocess(cmd)
 
@@ -943,8 +940,8 @@ class App:
         if self.proc and self.proc.poll() is None:
             done = self.counters["ok"] + self.counters["partial"] + self.counters["failed"]
             if not messagebox.askyesno(
-                "Run in progress",
-                f"A run is in progress ({done} done).\nQuit and stop the run?",
+                "Obrada u tijeku",
+                f"Obrada je u tijeku (gotovo: {done}).\nIzaći i zaustaviti obradu?",
             ):
                 return
             self._terminate_run()
@@ -989,7 +986,7 @@ class App:
             self.effort_combo.configure(state="disabled")
             self.chk_dry.configure(state="disabled")
             self.chk_resume.configure(state="disabled")
-            self.status_var.set("Starting…")
+            self.status_var.set("Pokrećem…")
         else:
             self.btn_start.configure(state="normal")
             self.btn_stop.configure(state="disabled")
@@ -1027,7 +1024,7 @@ class App:
 
     def _open_path(self, p: Path):
         if not p.exists():
-            messagebox.showinfo("Not found", f"{p} does not exist.")
+            messagebox.showinfo("Nije pronađeno", f"{p} ne postoji.")
             return
         try:
             if sys.platform.startswith("linux"):
@@ -1040,7 +1037,7 @@ class App:
             elif sys.platform == "win32":
                 os.startfile(str(p))  # type: ignore[attr-defined]
         except OSError as e:
-            messagebox.showerror("Cannot open", str(e))
+            messagebox.showerror("Ne mogu otvoriti", str(e))
 
     def _notify_done(self):
         if not sys.platform.startswith("linux"):
@@ -1049,9 +1046,9 @@ class App:
             subprocess.Popen(
                 [
                     "notify-send", "TRON-GRAVE",
-                    f"Done — {self.counters['ok']} OK, "
-                    f"{self.counters['partial']} manual, "
-                    f"{self.counters['failed']} failed",
+                    f"Gotovo — {self.counters['ok']} OK, "
+                    f"{self.counters['partial']} za pregled, "
+                    f"{self.counters['failed']} neuspjelo",
                 ],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
@@ -1101,10 +1098,10 @@ class App:
                 self.api_key_var.set(data["api_key"])
             # Ignore a model that is no longer offered -- a saved setting naming a
             # retired model would otherwise stick in the readonly combobox and get used.
-            if data.get("model") in MODELS:
-                self.model_var.set(data["model"])
-            if isinstance(data.get("effort"), str):
-                self.effort_var.set(data["effort"])
+            if data.get("model") in ui_logic.MODELS:
+                self.model_var.set(ui_logic.MODEL_LABELS[data["model"]])
+            if data.get("effort") in ui_logic.EFFORT_LEVELS:
+                self.effort_var.set(ui_logic.EFFORT_LABELS[data["effort"]])
         except (OSError, json.JSONDecodeError):
             pass
 
@@ -1117,8 +1114,8 @@ class App:
                         "input": self.input_var.get(),
                         "output": self.output_var.get(),
                         "api_key": self.api_key_var.get(),
-                        "model": self.model_var.get(),
-                        "effort": self.effort_var.get(),
+                        "model": self._model_id(),
+                        "effort": self._effort_id(),
                     },
                     f,
                 )
