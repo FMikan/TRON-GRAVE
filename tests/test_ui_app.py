@@ -471,6 +471,24 @@ class EstimateAppTests(AppCase):
         self.assertIn("Preskočeno HEIC/HEIF datoteka: 1", text)
         self.assertIn("gruba procjena", text)
 
+    def test_the_preview_uses_what_past_runs_learned_for_that_model_and_effort(self):
+        inp = self.tmp / "in"
+        inp.mkdir()
+        for name in ("a.jpg", "b.jpg"):
+            (inp / name).write_bytes(b"x")
+        self.app.input_var.set(str(inp))
+        self.app._settings["stats"] = {"claude-sonnet-5|high": {"cost": 1.0, "secs": 40.0, "n": 4}}
+        self.app.model_var.set(ui_logic.MODEL_LABELS["claude-sonnet-5"])
+        self.app.effort_var.set(ui_logic.EFFORT_LABELS["high"])
+        self.app._refresh_preview()
+        text = self.app.preview_var.get()
+        self.assertIn("prema prošlim obradama", text)
+        self.assertIn("~$0.50", text)
+        self.assertIn("~20s", text)
+        self.app.effort_var.set(ui_logic.EFFORT_LABELS["low"])      # nothing was learned at this effort
+        self.app._on_effort_change()
+        self.assertIn("gruba procjena", self.app.preview_var.get())
+
     def test_a_finished_run_teaches_the_estimate(self):
         self.app._reset_run_state()
         self.app._run_model, self.app._run_effort = "claude-sonnet-5", "high"

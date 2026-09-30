@@ -224,6 +224,10 @@ class EstimateTests(unittest.TestCase):
         self.assertGreater(cost / 100, 4_700 * 2 / 1_000_000)   # the photo alone on Sonnet 5
         self.assertEqual(secs, 100 * ui_logic.SECS_PER_IMAGE_GUESS)
 
+    def test_the_fallback_price_of_a_photo_on_sonnet_5(self):
+        # (4,700 image + 400 text) x $2/M + 4,500 cached prompt x $2/M x 0.10 + 1,500 output x $10/M
+        self.assertAlmostEqual(ui_logic.fallback_cost_per_image("claude-sonnet-5"), 0.0261, places=4)
+
     def test_measured_runs_take_over(self):
         stats = ui_logic.record_run({}, "claude-opus-5-5", "high", cost=3.0, secs=600.0, n=60)
         self.assertEqual(ui_logic.estimate(stats, "claude-opus-5-5", "high", 10), (0.5, 100.0, True))
@@ -245,6 +249,27 @@ class EstimateTests(unittest.TestCase):
                 self.assertFalse(measured)
                 self.assertEqual((cost, secs), (ui_logic.fallback_cost_per_image("claude-sonnet-5"),
                                                 ui_logic.SECS_PER_IMAGE_GUESS))
+
+    def test_a_number_too_big_for_a_float_falls_back_quietly(self):
+        # a 400-digit integer overflows the division, and estimate runs from __init__
+        stats = {"claude-sonnet-5|high": {"cost": 10**400, "secs": 1, "n": 1}}
+        self.assertFalse(ui_logic.estimate(stats, "claude-sonnet-5", "high", 1)[2])
+
+    def test_a_saved_nan_or_infinity_is_started_over_not_added_to(self):
+        for entry in ({"cost": float("nan"), "secs": 5.0, "n": 1},
+                      {"cost": 1.0, "secs": float("inf"), "n": 1}):
+            with self.subTest(entry=entry):
+                stats = ui_logic.record_run({"claude-sonnet-5|high": entry}, "claude-sonnet-5", "high",
+                                            cost=2.0, secs=30.0, n=3)
+                self.assertEqual(stats["claude-sonnet-5|high"], {"cost": 2.0, "secs": 30.0, "n": 3})
+
+    def test_a_saved_number_too_big_for_a_float_is_started_over(self):
+        for entry in ({"cost": 10**400, "secs": 5.0, "n": 1},
+                      {"cost": 1.0, "secs": 5.0, "n": float("inf")}):
+            with self.subTest(entry=entry):
+                stats = ui_logic.record_run({"claude-sonnet-5|high": entry}, "claude-sonnet-5", "high",
+                                            cost=2.0, secs=30.0, n=3)
+                self.assertEqual(stats["claude-sonnet-5|high"], {"cost": 2.0, "secs": 30.0, "n": 3})
 
 
 class RetrySettingsTests(unittest.TestCase):

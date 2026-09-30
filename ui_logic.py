@@ -255,8 +255,8 @@ def estimate(stats, model: str, effort: str, count: int) -> tuple[float, float, 
             secs = count * entry["secs"] / entry["n"]
             if math.isfinite(cost) and math.isfinite(secs):   # json reads a hand-edited NaN/Infinity
                 return cost, secs, True
-    except (KeyError, TypeError, ZeroDivisionError):
-        pass   # a hand-edited settings file: fall back to the rough guess
+    except (KeyError, TypeError, ArithmeticError):
+        pass   # a hand-edited settings file, even a 400-digit number: fall back to the rough guess
     return count * fallback_cost_per_image(model), count * SECS_PER_IMAGE_GUESS, False
 
 
@@ -267,12 +267,16 @@ def record_run(stats, model: str, effort: str, cost: float, secs: float, n: int)
         return stats
     key = f"{model}|{effort}"
     entry = stats.get(key) if isinstance(stats.get(key), dict) else {}
+    fresh = {"cost": cost, "secs": secs, "n": n}
     try:
-        stats[key] = {"cost": float(entry.get("cost", 0.0)) + cost,
-                      "secs": float(entry.get("secs", 0.0)) + secs,
-                      "n": int(entry.get("n", 0)) + n}
-    except (TypeError, ValueError):
-        stats[key] = {"cost": cost, "secs": secs, "n": n}
+        total = {"cost": float(entry.get("cost", 0.0)) + cost,
+                 "secs": float(entry.get("secs", 0.0)) + secs,
+                 "n": int(entry.get("n", 0)) + n}
+    except (TypeError, ValueError, OverflowError):
+        total = fresh       # unreadable: start the entry over
+    if not (math.isfinite(total["cost"]) and math.isfinite(total["secs"])):
+        total = fresh       # a hand-edited NaN or Infinity never heals by adding to it
+    stats[key] = total
     return stats
 
 
