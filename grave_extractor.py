@@ -60,6 +60,8 @@ def discover_images(input_dir: Path) -> tuple[list[Path], int]:
 
 
 def fatal(msg: str, tag: str | None = None) -> None:
+    # One line, so the GUI (which explains the last stderr line) never sees the tag cut off.
+    msg = " ".join(msg.split())
     print(f"error: [{tag}] {msg}" if tag else f"error: {msg}", file=sys.stderr)
     sys.exit(1)
 
@@ -129,7 +131,8 @@ def main() -> int:
     output_csv = output_dir / "output.csv"
     byhand_dir = output_dir / "byhand"
 
-    if input_dir.resolve() == byhand_dir.resolve():
+    # samefile, not resolve(): on a case-insensitive filesystem out/ByHand is byhand/ too.
+    if os.path.exists(byhand_dir) and os.path.samefile(input_dir, byhand_dir):
         fatal("The input folder is this output folder's byhand/ folder. Choose a different "
               "output folder.", "input-is-byhand")
 

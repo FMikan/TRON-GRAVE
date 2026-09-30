@@ -67,6 +67,14 @@ class FatalErrorTests(CliCase):
         self.assertEqual((code, len(client.calls)), (1, 1))
         self.assertIn("error: [api-402]", err)
 
+    def test_a_line_break_in_the_reason_keeps_the_tagged_error_on_one_stderr_line(self):
+        # the GUI explains the tag from the last stderr line, so the tag must not be cut off
+        self.add_image("p_1_x.jpg")
+        code, _, err, _ = self.run_cli(api_error(402, body="credit balance\nis too low"))
+        self.assertEqual(code, 1)
+        self.assertEqual(err.splitlines(),
+                         ["error: [api-402] API call failed: Error code: 402 - credit balance is too low"])
+
     def test_three_api_failures_in_a_row_stop_the_run(self):
         for i in range(5):
             self.add_image(f"p_{i}_x.jpg")
@@ -318,6 +326,17 @@ class InputTests(CliCase):
         self.assertIn("[input-is-byhand]", err)
         self.assertTrue(photo.exists())                                   # not cleared
         self.assertEqual(old_csv.read_text(encoding="utf-8"), "old run")  # not replaced
+
+    def test_the_filesystems_verdict_decides_whether_the_input_is_byhand(self):
+        # On macOS and Windows out/ByHand is byhand/, yet resolve() keeps the typed case.
+        (self.out / "byhand").mkdir(parents=True)
+        self.inp = self.out / "ByHand"
+        self.inp.mkdir(exist_ok=True)
+        self.add_image("p_1_x.jpg")
+        with mock.patch.object(grave_extractor.os.path, "samefile", return_value=True):
+            code, _, err, client = self.run_cli()
+        self.assertEqual((code, client.calls), (1, []))
+        self.assertIn("[input-is-byhand]", err)
 
     def test_the_byhand_refusal_comes_before_the_resume_checks(self):
         self.inp = self.out / "byhand"
