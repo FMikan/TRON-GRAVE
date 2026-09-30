@@ -4,8 +4,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import httpx
+
 from extractor import image_processor as ip
-from tests.helpers import FakeClient, answer, jpeg_bytes, message, record
+from tests.helpers import FakeClient, MidStream, answer, api_error, jpeg_bytes, message, record
 
 
 class ProcessImageCase(unittest.TestCase):
@@ -146,3 +148,47 @@ class NotesTests(ProcessImageCase):
         result = ip.process_image(FakeClient(message(text="x")), "claude-sonnet-5",
                                   self.img, "305", "high", ("ID iz naziva",))
         self.assertEqual(result.rows[0][5], "neispravan odgovor; ID iz naziva")
+
+
+class ApiErrorTests(ProcessImageCase):
+    def test_billing_error_is_fatal(self):
+        body = {"type": "error", "error": {"type": "billing_error", "message": "x"}}
+        result, _ = self.run_image(api_error(402, body))
+        self.assertEqual(result.fatal_tag, "api-402")
+
+    def test_a_429_without_retry_after_is_the_spend_cap(self):
+        result, client = self.run_image(api_error(429))
+        self.assertEqual((result.fatal_tag, len(client.calls)), ("spend-cap", 1))
+
+    def test_a_rate_limit_with_retry_after_is_retried(self):
+        result, client = self.run_image(api_error(429, headers={"retry-after": "1"}), message(answer(record())))
+        self.assertEqual((result.status, len(client.calls)), ("full_success", 2))
+
+    def test_an_overload_error_mid_stream_is_retried(self):
+        body = {"type": "error", "error": {"type": "overloaded_error", "message": "x"}}
+        result, client = self.run_image(MidStream(api_error(200, body)), message(answer(record())))
+        self.assertEqual((result.status, len(client.calls)), ("full_success", 2))
+
+    def test_a_connection_dropped_mid_stream_is_retried(self):
+        result, _ = self.run_image(MidStream(httpx.RemoteProtocolError("peer closed")), message(answer(record())))
+        self.assertEqual(result.status, "full_success")
+
+    def test_a_bad_request_is_an_unbilled_api_failure(self):
+        result, _ = self.run_image(api_error(400))
+        self.assertEqual((result.api_failure, result.billed, result.fatal_tag), (True, False, None))
+
+    def test_an_answer_is_billed(self):
+        result, _ = self.run_image(message(answer(record())))
+        self.assertEqual((result.api_failure, result.billed), (False, True))
+
+    def test_an_api_failure_carries_the_extra_tags(self):
+        result = ip.process_image(FakeClient(api_error(400)), "claude-sonnet-5",
+                                  self.img, "305", "high", ("ID iz naziva",))
+        self.assertEqual(result.rows[0][5], "greška API-ja; ID iz naziva")
+
+    def test_exhausted_retries_are_an_api_failure_that_keeps_the_extra_tags(self):
+        client = FakeClient(*[api_error(500) for _ in range(4)])
+        result = ip.process_image(client, "claude-sonnet-5", self.img, "305", "high", ("ID iz naziva",))
+        self.assertEqual((result.api_failure, result.billed, result.fatal_tag, len(client.calls)),
+                         (True, False, None, 4))
+        self.assertEqual(result.rows[0][5], "greška API-ja; ID iz naziva")

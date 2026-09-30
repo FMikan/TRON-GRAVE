@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import anthropic
+import httpx
 from PIL import Image, ImageOps
 
 from .pricing import compute_cost
@@ -279,9 +280,9 @@ RESULT_SCHEMA = {
 _SYSTEM_BLOCKS = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
 
 _RETRY_DELAYS = [2, 4, 8]
-# Status codes that doom the whole run (bad key, no access, unknown model) rather than
-# just this one image (400 bad request, 413 too large) -- only these abort the batch.
-_FATAL_STATUS_CODES = frozenset({401, 403, 404})
+# Status codes that doom the whole run (bad key, billing, no access, unknown model) rather
+# than just this one image -- only these abort the batch outright.
+_FATAL_STATUS_CODES = frozenset({401, 402, 403, 404})
 _RECORD_FIELDS = ('name', 'surname', 'birth_year', 'death_year')
 # Only a missing name/surname forces manual review; birth/death years get a
 # certainty status so a *certain* absence can still pass as OK.
@@ -298,8 +299,10 @@ class ImageResult:
     status: str
     rows: list[list]
     reason: str | None
-    fatal_api_error: bool = False
     cost: float = 0.0
+    fatal_tag: str | None = None   # set when the whole run must stop, e.g. "api-402"
+    api_failure: bool = False      # the API call itself failed: nothing billed, resume retries it
+    billed: bool = False           # the model answered, whatever the verdict
 
 
 def failure_row(record_id: str, note: str, extra_tags=(), file_name: str = "") -> list:
@@ -452,6 +455,25 @@ def _jittered(delay: float) -> float:
     return delay * (1 + random.uniform(-0.25, 0.25))
 
 
+def _fatal_tag(e: anthropic.APIStatusError) -> str | None:
+    """The tag for an error that dooms the whole run, else None."""
+    if e.type == "billing_error":
+        return "api-402"
+    if e.status_code in _FATAL_STATUS_CODES:
+        return f"api-{e.status_code}"
+    # A 429 without retry-after is the usage tier's monthly spend cap, which keeps failing
+    # until access resumes; a real rate limit says when to come back.
+    if e.status_code == 429 and not e.response.headers.get("retry-after"):
+        return "spend-cap"
+    return None
+
+
+def _is_retryable(e: anthropic.APIStatusError) -> bool:
+    # Below 400: an error event mid-stream after a 200 (e.g. overloaded_error), which the
+    # SDK does not retry itself.
+    return e.status_code == 429 or e.status_code >= 500 or e.status_code < 400
+
+
 def _max_tokens(effort: str | None) -> int:
     # Thinking shares this budget, and the top two effort levels can think well past 16k.
     return 64000 if effort in ("xhigh", "max") else 16000
@@ -532,22 +554,21 @@ def process_image(client, model: str, path: Path, record_id: str,
         try:
             response = _call_api(client, model, mime, b64, effort)
             break
-        # RateLimitError subclasses APIStatusError, so it MUST be caught first -- otherwise
-        # a 429 lands in the clause below, fails the `>= 500` test and is reported as a
-        # non-retryable error. (The SDK has already retried with backoff by this point.)
-        except (anthropic.RateLimitError, anthropic.APIConnectionError, anthropic.APITimeoutError) as e:
-            last_error = e
         except anthropic.APIStatusError as e:
-            status_code = getattr(e, 'status_code', None)
-            if status_code is not None and status_code >= 500:
-                last_error = e
-            else:
+            fatal_tag = _fatal_tag(e)
+            if fatal_tag or not _is_retryable(e):
                 return ImageResult(
                     status='total_failure',
                     rows=[failure_row(record_id, "greška API-ja", extra_tags, file_name)],
                     reason=str(e),
-                    fatal_api_error=status_code in _FATAL_STATUS_CODES,
+                    fatal_tag=fatal_tag,
+                    api_failure=True,
                 )
+            last_error = e
+        # Dropped connections and timeouts, including a stream cut off mid-read, which
+        # surfaces as a raw httpx error. (The SDK has already retried with backoff.)
+        except (anthropic.APIConnectionError, httpx.TransportError) as e:
+            last_error = e
 
         if attempt < 3:
             time.sleep(_jittered(_RETRY_DELAYS[attempt]))
@@ -557,13 +578,16 @@ def process_image(client, model: str, path: Path, record_id: str,
             status='total_failure',
             rows=[failure_row(record_id, "greška API-ja", extra_tags, file_name)],
             reason=f"API call failed after retries: {last_error}",
+            api_failure=True,
         )
 
     # A response was received, so this call is billed regardless of how well the
     # model extracted the data -- attach the real cost to every return from here on.
     cost = compute_cost(model, response.usage)
 
-    return _classify(response, cost, record_id, extra_tags, file_name)
+    result = _classify(response, cost, record_id, extra_tags, file_name)
+    result.billed = True
+    return result
 
 
 def _classify(response, cost: float, record_id: str, extra_tags, file_name: str) -> ImageResult:

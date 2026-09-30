@@ -9,7 +9,7 @@ from unittest import mock
 
 import grave_extractor
 from extractor.csv_writer import read_csv
-from tests.helpers import FakeClient, answer, jpeg_bytes, message, record
+from tests.helpers import FakeClient, answer, api_error, jpeg_bytes, message, record
 
 
 class CliCase(unittest.TestCase):
@@ -55,3 +55,26 @@ class IdTagTests(CliCase):
         code, *_ = self.run_cli(message(answer(record(birth=None, birth_status="unreadable"))))
         self.assertEqual(code, 2)
         self.assertEqual(self.rows()[0][5], "god. rođenja nečitka; ID iz naziva")
+
+
+class FatalErrorTests(CliCase):
+    def test_a_billing_error_stops_the_run_with_a_tag(self):
+        for name in ("p_1_x.jpg", "p_2_x.jpg"):
+            self.add_image(name)
+        code, _, err, client = self.run_cli(api_error(402))
+        self.assertEqual((code, len(client.calls)), (1, 1))
+        self.assertIn("error: [api-402]", err)
+
+    def test_three_api_failures_in_a_row_stop_the_run(self):
+        for i in range(5):
+            self.add_image(f"p_{i}_x.jpg")
+        code, _, err, client = self.run_cli(api_error(400), api_error(400), api_error(400))
+        self.assertEqual((code, len(client.calls)), (1, 3))
+        self.assertIn("error: [api-down]", err)
+        self.assertFalse((self.out / "byhand").exists())   # API failures are not review cases
+
+    def test_an_answer_resets_the_failure_count(self):
+        for i in range(4):
+            self.add_image(f"p_{i}_x.jpg")
+        code, _, _, client = self.run_cli(api_error(400), api_error(400), message(answer(record())), api_error(400))
+        self.assertEqual((code, len(client.calls)), (2, 4))

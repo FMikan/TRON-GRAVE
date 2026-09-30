@@ -18,6 +18,9 @@ from extractor.image_processor import process_image
 
 
 DEFAULT_MODEL = "claude-sonnet-5"
+# Consecutive API failures that end the run: an account-level problem (spend limit, billing,
+# outage) fails every image the same way, and carrying on would only log blank rows.
+MAX_CONSECUTIVE_API_FAILURES = 3
 
 
 def parse_args() -> argparse.Namespace:
@@ -46,8 +49,8 @@ def discover_images(input_dir: Path) -> list[Path]:
     return sorted(p for p in input_dir.iterdir() if p.is_file() and is_supported_image(p))
 
 
-def fatal(msg: str) -> None:
-    print(f"error: {msg}", file=sys.stderr)
+def fatal(msg: str, tag: str | None = None) -> None:
+    print(f"error: [{tag}] {msg}" if tag else f"error: {msg}", file=sys.stderr)
     sys.exit(1)
 
 
@@ -110,6 +113,7 @@ def main() -> int:
     byhand_count = 0
     had_any_issue = False
     total_cost = 0.0
+    api_failures_in_row = 0
 
     for idx, img in enumerate(images, start=1):
         record_id, matched = extract_id(img)
@@ -120,16 +124,22 @@ def main() -> int:
 
         result = process_image(client, model, img, record_id, args.effort, extra_tags)
         total_cost += result.cost
-        cost_suffix = f" — ${result.cost:.4f} (total: ${total_cost:.2f})" if result.cost else ""
+        cost_suffix = f" — ${result.cost:.4f} (total: ${total_cost:.2f})" if result.billed else ""
 
-        # An account-level failure (revoked key, no access, unknown model) dooms every
-        # remaining image, so stop at whatever index it surfaces -- carrying on would just
-        # append blank rows for the rest of the batch and report the run as finished.
-        if result.fatal_api_error:
+        # An account-level failure (revoked key, billing, spend cap, no access, unknown model)
+        # dooms every remaining image, and so do three API failures in a row (spend limit,
+        # outage): stop at once instead of logging blank rows for the rest of the batch.
+        if result.api_failure:
+            api_failures_in_row += 1
+        elif result.billed:
+            api_failures_in_row = 0
+        if result.fatal_tag or api_failures_in_row >= MAX_CONSECUTIVE_API_FAILURES:
             if args.verbose:
                 print(f"FAILED ({result.reason})")
-            print(f"error: API call failed: {result.reason}", file=sys.stderr)
-            return 1
+            if result.fatal_tag:
+                fatal(f"API call failed: {result.reason}", result.fatal_tag)
+            fatal(f"{MAX_CONSECUTIVE_API_FAILURES} API calls in a row failed; stopping so the rest "
+                  f"can be resumed later. Last error: {result.reason}", "api-down")
 
         if not matched:
             had_any_issue = True
@@ -154,8 +164,11 @@ def main() -> int:
             if args.verbose:
                 print(f"PARTIAL ({result.reason}){cost_suffix}")
         else:
-            copy_to_byhand(img, byhand_dir)
-            byhand_count += 1
+            # An API failure is not a review case: resume retries it, and a copy here would
+            # have the retry button pay a stronger model to re-send it.
+            if not result.api_failure:
+                copy_to_byhand(img, byhand_dir)
+                byhand_count += 1
             failed += 1
             had_any_issue = True
             if args.verbose:
