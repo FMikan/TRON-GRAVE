@@ -91,3 +91,58 @@ class FileColumnTests(ProcessImageCase):
         self.assertEqual([row[6] for row in ok.rows], [self.img.name, self.img.name])
         failed, _ = self.run_image(message(text="not json"))
         self.assertEqual(failed.rows[0][6], self.img.name)
+
+
+class ClassificationTests(ProcessImageCase):
+    def test_blank_name_counts_as_missing(self):
+        result, _ = self.run_image(message(answer(record(name="  "))))
+        self.assertEqual(result.status, "partial_success")
+        self.assertIn("fali: ime", result.rows[0][5])
+
+    def test_model_error_alongside_records_goes_to_review(self):
+        result, _ = self.run_image(message(answer(record(), error="natpis djelomično oštećen")))
+        self.assertEqual(result.status, "partial_success")
+        self.assertIn("natpis djelomično oštećen", result.rows[0][5])
+
+    def test_blank_error_without_records_is_explained(self):
+        result, _ = self.run_image(message(answer(error="")))
+        self.assertEqual(result.rows[0][5], "nema podataka")
+
+    def test_implausible_years_go_to_review(self):
+        for birth, death in ((1920, 20), ("19?8", 1999), (1920, 2999), (True, 1999)):
+            result, _ = self.run_image(message(answer(record(birth=birth, death=death))))
+            self.assertEqual(result.status, "partial_success", (birth, death))
+            self.assertIn("nečitka", result.rows[0][5])
+
+    def test_a_four_digit_string_year_is_accepted(self):
+        result, _ = self.run_image(message(answer(record(birth="1920"))))
+        self.assertEqual((result.status, result.rows[0][3]), ("full_success", 1920))
+
+    def test_birth_after_death_keeps_both_years_and_is_flagged(self):
+        result, _ = self.run_image(message(answer(record(birth=1987, death=1939))))
+        self.assertEqual(result.status, "partial_success")
+        self.assertEqual(result.rows[0][3:5], [1987, 1939])
+        self.assertIn("provjeri godine", result.rows[0][5])
+
+
+class NotesTests(ProcessImageCase):
+    def test_system_tags_are_never_cut(self):
+        rec = record(name=None, birth=None, birth_status="unreadable", death=None, death_status="unreadable")
+        result = ip.process_image(FakeClient(message(answer(rec, ambiguous=True))), "claude-sonnet-5",
+                                  self.img, "305", "high", ("ID iz naziva",))
+        note = result.rows[0][5]
+        for tag in ("fali: ime", "god. rođenja nečitka", "god. smrti nečitka",
+                    "provjeri: možda više oznaka", "ID iz naziva"):
+            self.assertIn(tag, note)
+
+    def test_the_models_note_comes_last_and_is_capped(self):
+        long_note = "spomenik jako oštećen, vidljiv samo donji dio ploče s natpisom " * 3
+        result, _ = self.run_image(message(answer(record(birth=None, birth_status="unreadable", note=long_note))))
+        note = result.rows[0][5]
+        self.assertTrue(note.startswith("god. rođenja nečitka; spomenik"))
+        self.assertLessEqual(len(note) - len("god. rođenja nečitka; "), 120)
+
+    def test_failure_rows_carry_the_extra_tags(self):
+        result = ip.process_image(FakeClient(message(text="x")), "claude-sonnet-5",
+                                  self.img, "305", "high", ("ID iz naziva",))
+        self.assertEqual(result.rows[0][5], "neispravan odgovor; ID iz naziva")

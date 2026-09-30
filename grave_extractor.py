@@ -14,7 +14,7 @@ from extractor.csv_writer import (
     append_rows, init_csv, init_processed, mark_processed, read_processed,
 )
 from extractor.file_utils import copy_to_byhand, extract_id, is_supported_image
-from extractor.image_processor import append_note, process_image
+from extractor.image_processor import process_image
 
 
 DEFAULT_MODEL = "claude-sonnet-5"
@@ -113,11 +113,12 @@ def main() -> int:
 
     for idx, img in enumerate(images, start=1):
         record_id, matched = extract_id(img)
+        extra_tags = () if matched else ("ID iz naziva",)
 
         if args.verbose:
             print(f"[{idx}/{total}] Processing {img.name} ... ", end="", flush=True)
 
-        result = process_image(client, model, img, record_id, args.effort)
+        result = process_image(client, model, img, record_id, args.effort, extra_tags)
         total_cost += result.cost
         cost_suffix = f" — ${result.cost:.4f} (total: ${total_cost:.2f})" if result.cost else ""
 
@@ -131,9 +132,6 @@ def main() -> int:
             return 1
 
         if not matched:
-            # No errors.txt anymore: flag the non-standard filename in the Notes cell.
-            for row in result.rows:
-                append_note(row, "ID iz naziva")
             had_any_issue = True
 
         append_rows(output_csv, result.rows)

@@ -1,8 +1,10 @@
 import base64
+import datetime
 import io
 import json
 import math
 import random
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -98,7 +100,7 @@ Your task:
    set it to null rather than invent one. You MAY INFER a value the stone does not state outright when
    the transcription lets you conclude it with HIGH confidence — reasoning, not guessing. The clearest
    case is arithmetic: if a death year and an age at death are inscribed but the birth year is not,
-   compute it (e.g. "umrla 1987. u 48. godini" → rođ. ~1939); likewise derive a missing death year
+   compute it (e.g. "umrla 1987. u 48. godini" → rođ. 1939); likewise derive a missing death year
    from a birth year plus a stated age. Croatian "u N. godini (života)" = the N-th year of life (N−1
    completed years), so a computed year may be off by ±1 — acceptable, because it is tagged as
    inferred (see below). Only commit an inferred value when you are confident it is essentially
@@ -147,8 +149,8 @@ Your task:
    A "present" or "inferred" status counts only if you actually put the 4-digit number in the year
    field — a status with a null year is treated as "unreadable" and sent for manual review.
 9. "note": usually null. The system already records missing name/surname and each year's status
-   automatically in the same note cell (capped at 60 characters), and your note is appended after
-   that — so keep it to a few words and add ONLY what those fields cannot convey (e.g. "osoba živa"
+   automatically in the same note cell, and your note is appended after that — so keep it to a
+   few words and add ONLY what those fields cannot convey (e.g. "osoba živa"
    to mark a living person, "spomenik oštećen", "dvije obitelji"). Do NOT restate what a null
    name/surname or a year status already says.
 10. If the image is completely unreadable, set records to [] and explain why in the error field in
@@ -191,7 +193,7 @@ Worked examples:
   a real nominative name (e.g. "Mare", "Pave") unless an accompanying surname fixes the case; if it
   does not, keep the name as carved.
 - "MARIJA HORVAT umrla 1987. u 48. godini", no birth year carved: death_year_status="present" (1987),
-  and birth_year_status="inferred" with birth_year ~1939 (1987 minus 48). Had the age been missing or
+  and birth_year_status="inferred" with birth_year 1939 (1987 minus 48). Had the age been missing or
   unclear, do NOT infer — leave the birth year absent/unreadable.
 - Two spouses share one grave: "IVAN HORVAT 1936–2001" (crisp) and "MARIJA HORVAT 19?8–2010", where
   the tens digit of Marija's birth year is worn and its faint strokes fit either "3" or "4". Spouses
@@ -285,10 +287,10 @@ _RECORD_FIELDS = ('name', 'surname', 'birth_year', 'death_year')
 # certainty status so a *certain* absence can still pass as OK.
 _CORE_FIELDS = ('name', 'surname')
 _CORE_LABELS_HR = {'name': 'ime', 'surname': 'prezime'}
-
-# Index of the Notes cell in a row, so callers can append to it.
-NOTE_INDEX = 5
-_MAX_NOTE_CHARS = 60
+# Cap on the model's own free text (its note or error sentence) in the Notes cell. The
+# system's tags are never cut: they are what a reviewer filters on.
+_MAX_MODEL_TEXT = 120
+_FOUR_DIGITS = re.compile(r'\d{4}')
 
 
 @dataclass
@@ -300,85 +302,91 @@ class ImageResult:
     cost: float = 0.0
 
 
-def _empty_row(record_id: str, note: str, file_name: str) -> list:
-    return [record_id, "", "", "", "", note, file_name]
+def failure_row(record_id: str, note: str, extra_tags=(), file_name: str = "") -> list:
+    """The one row written for a photo that yielded no records."""
+    return [record_id, "", "", "", "", _join_notes([note, *extra_tags]), file_name]
 
 
-def append_note(row: list, tag: str) -> None:
-    """Append a tag to a row's Notes cell, keeping the cell within the documented cap."""
-    existing = row[NOTE_INDEX]
-    row[NOTE_INDEX] = (f"{existing}; {tag}" if existing else tag)[:_MAX_NOTE_CHARS]
+def _join_notes(tags: list[str], model_note: str = "") -> str:
+    """System tags first and never cut; the model's own note last, capped."""
+    parts = [t for t in tags if t]
+    model_note = model_note[:_MAX_MODEL_TEXT]
+    if model_note and model_note not in parts:
+        parts.append(model_note)
+    return "; ".join(parts)
 
 
-def _year_state(rec: dict, year_field: str, status_field: str) -> str:
+def _clean_text(value) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _clean_year(value) -> int | None:
+    """A plausible 4-digit year as an int, else None ('19?8', 20, 2999, True...)."""
+    if isinstance(value, str) and _FOUR_DIGITS.fullmatch(value.strip()):
+        value = int(value.strip())
+    if (isinstance(value, int) and not isinstance(value, bool)
+            and 1000 <= value <= datetime.date.today().year):
+        return value
+    return None
+
+
+def _year_state(raw_value, value: int | None, status) -> str:
     """Resolve a year's situation defensively, never trusting a lone flag.
 
-    A concrete year value always wins: it counts as 'inferred' when the model
-    flagged it as derived, otherwise 'present'. A null only counts as a certain
-    absence when the model explicitly says so; anything else (incl. a 'present'
-    flag with no year) falls back to 'unreadable' so the image is sent to byhand,
-    not passed as OK.
+    A usable year always wins: 'inferred' when the model flagged it as derived, otherwise
+    'present'. A value that was given but is not a plausible year is 'unreadable'. A null
+    only counts as a certain absence when the model explicitly says so; anything else
+    (incl. a 'present' flag with no year) falls back to 'unreadable' so the image is sent
+    to byhand, not passed as OK.
     """
-    if rec.get(year_field) is not None:
-        return "inferred" if rec.get(status_field) == "inferred" else "present"
-    if rec.get(status_field) == "absent_certain":
+    if value is not None:
+        return "inferred" if status == "inferred" else "present"
+    if raw_value is None and status == "absent_certain":
         return "absent_certain"
     return "unreadable"
 
 
-def _birth_state(rec: dict) -> str:
-    return _year_state(rec, "birth_year", "birth_year_status")
+def _impossible_pair(rec: dict) -> bool:
+    return rec["birth_year"] is not None and rec["death_year"] is not None and rec["birth_year"] > rec["death_year"]
 
 
-def _death_state(rec: dict) -> str:
-    return _year_state(rec, "death_year", "death_year_status")
-
-
-def _build_note(rec: dict, birth_state: str, death_state: str) -> str:
-    """Short Croatian note for the CSV Notes column (edge cases only)."""
-    bits = []
-    missing = [_CORE_LABELS_HR[f] for f in _CORE_FIELDS if rec.get(f) is None]
+def _record_tags(rec: dict, birth_state: str, death_state: str) -> list[str]:
+    """Short Croatian tags for the CSV Notes column (edge cases only)."""
+    tags = []
+    missing = [_CORE_LABELS_HR[f] for f in _CORE_FIELDS if rec[f] is None]
     if missing:
-        bits.append("fali: " + ", ".join(missing))
+        tags.append("fali: " + ", ".join(missing))
 
     # Combine the two "certain absence" cases for brevity.
     if birth_state == "absent_certain" and death_state == "absent_certain":
-        bits.append("bez god. rođ. i smrti")
+        tags.append("bez god. rođ. i smrti")
     else:
         if birth_state == "absent_certain":
-            bits.append("bez god. rođenja")
+            tags.append("bez god. rođenja")
         if death_state == "absent_certain":
-            bits.append("bez god. smrti")
+            tags.append("bez god. smrti")
 
     if birth_state == "unreadable":
-        bits.append("god. rođenja nečitka")
+        tags.append("god. rođenja nečitka")
     if death_state == "unreadable":
-        bits.append("god. smrti nečitka")
+        tags.append("god. smrti nečitka")
 
     if birth_state == "inferred":
-        bits.append("god. rođ. izvedena")
+        tags.append("god. rođ. izvedena")
     if death_state == "inferred":
-        bits.append("god. smrti izvedena")
-    base = "; ".join(bits)
-
-    model_note = (rec.get("note") or "").strip()
-    if model_note and base:
-        # The model's note carries what the generated bits cannot ("osoba živa"), and the
-        # base alone can already fill the cap -- so truncate the base, never drop the note.
-        base = base[:max(0, _MAX_NOTE_CHARS - len(model_note) - 3)]
-        note = f"{base} — {model_note}" if base else model_note
-    else:
-        note = model_note or base
-    return note[:_MAX_NOTE_CHARS]
+        tags.append("god. smrti izvedena")
+    if _impossible_pair(rec):
+        tags.append("provjeri godine")
+    return tags
 
 
 def _record_to_row(record_id: str, rec: dict, note: str, file_name: str) -> list:
     return [
         record_id,
-        rec.get("name") or "",
-        rec.get("surname") or "",
-        rec.get("birth_year") if rec.get("birth_year") is not None else "",
-        rec.get("death_year") if rec.get("death_year") is not None else "",
+        rec["name"] or "",
+        rec["surname"] or "",
+        rec["birth_year"] if rec["birth_year"] is not None else "",
+        rec["death_year"] if rec["death_year"] is not None else "",
         note,
         file_name,
     ]
@@ -505,14 +513,14 @@ def _parse_answer(response) -> dict | None:
 
 
 def process_image(client, model: str, path: Path, record_id: str,
-                  effort: str | None = None) -> ImageResult:
+                  effort: str | None = None, extra_tags: tuple[str, ...] = ()) -> ImageResult:
     file_name = path.name
     try:
         image_bytes, mime = prepare_image(path.read_bytes())
     except (OSError, ImageUnreadable) as e:
         return ImageResult(
             status='total_failure',
-            rows=[_empty_row(record_id, "ne mogu otvoriti", file_name)],
+            rows=[failure_row(record_id, "ne mogu otvoriti", extra_tags, file_name)],
             reason=f"File could not be read or decoded: {e}",
         )
 
@@ -536,7 +544,7 @@ def process_image(client, model: str, path: Path, record_id: str,
             else:
                 return ImageResult(
                     status='total_failure',
-                    rows=[_empty_row(record_id, "greška API-ja", file_name)],
+                    rows=[failure_row(record_id, "greška API-ja", extra_tags, file_name)],
                     reason=str(e),
                     fatal_api_error=status_code in _FATAL_STATUS_CODES,
                 )
@@ -547,7 +555,7 @@ def process_image(client, model: str, path: Path, record_id: str,
     if response is None:
         return ImageResult(
             status='total_failure',
-            rows=[_empty_row(record_id, "greška API-ja", file_name)],
+            rows=[failure_row(record_id, "greška API-ja", extra_tags, file_name)],
             reason=f"API call failed after retries: {last_error}",
         )
 
@@ -555,121 +563,77 @@ def process_image(client, model: str, path: Path, record_id: str,
     # model extracted the data -- attach the real cost to every return from here on.
     cost = compute_cost(model, response.usage)
 
-    return _classify(response, cost, record_id, file_name)
+    return _classify(response, cost, record_id, extra_tags, file_name)
 
 
-def _classify(response, cost: float, record_id: str, file_name: str) -> ImageResult:
+def _classify(response, cost: float, record_id: str, extra_tags, file_name: str) -> ImageResult:
     """Turn one answered (and billed) API call into CSV rows and a verdict."""
-    if response.stop_reason == "refusal":
+    def failure(note: str, reason: str) -> ImageResult:
         return ImageResult(
             status='total_failure',
-            rows=[_empty_row(record_id, "odbijeno", file_name)],
-            reason="Model declined to answer (refusal)",
+            rows=[failure_row(record_id, note, extra_tags, file_name)],
+            reason=reason,
             cost=cost,
         )
 
+    if response.stop_reason == "refusal":
+        return failure("odbijeno", "Model declined to answer (refusal)")
     # A turn cut off at max_tokens leaves half-written JSON, which would parse into silently
     # missing people if it parsed at all. Bail before looking at it.
     if response.stop_reason == "max_tokens":
-        return ImageResult(
-            status='total_failure',
-            rows=[_empty_row(record_id, "odgovor prekinut", file_name)],
-            reason="Response hit the max_tokens ceiling before the answer finished",
-            cost=cost,
-        )
-
+        return failure("odgovor prekinut", "Response hit the max_tokens ceiling before the answer finished")
     data = _parse_answer(response)
     if data is None:
-        return ImageResult(
-            status='total_failure',
-            rows=[_empty_row(record_id, "neispravan odgovor", file_name)],
-            reason=f"Model returned no valid JSON answer (stop_reason: {response.stop_reason})",
-            cost=cost,
-        )
+        return failure("neispravan odgovor",
+                       f"Model returned no valid JSON answer (stop_reason: {response.stop_reason})")
 
     records = data["records"]
-    error = data.get("error")
-
-    if error is not None and not records:
-        return ImageResult(
-            status='total_failure',
-            rows=[_empty_row(record_id, (error or "").strip()[:_MAX_NOTE_CHARS], file_name)],
-            reason=error,
-            cost=cost,
-        )
-
+    error = _clean_text(data.get("error"))
     if not records:
-        return ImageResult(
-            status='total_failure',
-            rows=[_empty_row(record_id, "nema podataka", file_name)],
-            reason="Model returned no records",
-            cost=cost,
-        )
+        return failure(error[:_MAX_MODEL_TEXT] or "nema podataka", error or "Model returned no records")
 
-    all_empty = all(
-        all(rec.get(field) is None for field in _RECORD_FIELDS)
-        for rec in records
-    )
-    if all_empty:
-        return ImageResult(
-            status='total_failure',
-            rows=[_empty_row(record_id, "sve nečitko", file_name)],
-            reason="All fields illegible",
-            cost=cost,
-        )
-
-    # Per-record: resolve the birth/death-year states and build the Croatian note.
-    birth_states = [_birth_state(rec) for rec in records]
-    death_states = [_death_state(rec) for rec in records]
-    rows = [
-        _record_to_row(record_id, rec, _build_note(rec, bs, ds), file_name)
-        for rec, bs, ds in zip(records, birth_states, death_states)
+    # Blank names count as missing, and a year only counts as a plausible 4-digit year: the
+    # schema cannot stop "", "19?8" or 20.
+    cleaned = [
+        {
+            "name": _clean_text(r.get("name")) or None,
+            "surname": _clean_text(r.get("surname")) or None,
+            "birth_year": _clean_year(r.get("birth_year")),
+            "death_year": _clean_year(r.get("death_year")),
+        }
+        for r in records
     ]
+    if all(all(rec[f] is None for f in _RECORD_FIELDS) for rec in cleaned):
+        return failure("sve nečitko", "All fields illegible")
 
-    # The model left out nearby markers it wasn't sure belong to this grave.
-    # Flag every row so the photo can be checked manually for missed people.
+    # Tags every row of this photo shares: the model left out nearby markers it wasn't sure
+    # belong to this grave, or complained about the photo while still reading records.
     ambiguous = bool(data.get("ambiguous_multiple_markers"))
-    if ambiguous:
-        for row in rows:
-            append_note(row, "provjeri: možda više oznaka")
+    shared = (["provjeri: možda više oznaka"] if ambiguous else []) \
+        + ([error[:_MAX_MODEL_TEXT]] if error else []) + list(extra_tags)
 
-    has_missing_core = any(
-        any(rec.get(field) is None for field in _CORE_FIELDS)
-        for rec in records
-    )
-    has_uncertain_year = any(s == "unreadable" for s in birth_states + death_states)
+    rows, states = [], []
+    for raw, rec in zip(records, cleaned):
+        birth = _year_state(raw.get("birth_year"), rec["birth_year"], raw.get("birth_year_status"))
+        death = _year_state(raw.get("death_year"), rec["death_year"], raw.get("death_year_status"))
+        states += [birth, death]
+        note = _join_notes(_record_tags(rec, birth, death) + shared, _clean_text(raw.get("note")))
+        rows.append(_record_to_row(record_id, rec, note, file_name))
 
-    # Priority: a missing name/surname always wins, then an unreadable birth/death year,
-    # then an ambiguous multi-marker grave -- the model saying it may have missed people
-    # is exactly the case a human should look at, as the README's Notes table promises.
-    # A *certain* absence of a year needs no review and still passes as OK.
-    if has_missing_core:
-        return ImageResult(
-            status='partial_success',
-            rows=rows,
-            reason="Name or surname could not be read",
-            cost=cost,
-        )
-
-    if has_uncertain_year:
-        return ImageResult(
-            status='partial_success',
-            rows=rows,
-            reason="Model not certain whether a year of birth or death exists",
-            cost=cost,
-        )
-
-    if ambiguous:
-        return ImageResult(
-            status='partial_success',
-            rows=rows,
-            reason="Nearby markers may belong to this grave and were left out",
-            cost=cost,
-        )
-
-    return ImageResult(
-        status='full_success',
-        rows=rows,
-        reason=None,
-        cost=cost,
-    )
+    # Priority: a missing name/surname, an unreadable year, an impossible pair of years, the
+    # model's own complaint, and last an ambiguous multi-marker grave -- the model saying it
+    # may have missed people is exactly the case a human should look at. A *certain*
+    # absence of a year needs no review and still passes as OK.
+    if any(rec[f] is None for rec in cleaned for f in _CORE_FIELDS):
+        reason = "Name or surname could not be read"
+    elif "unreadable" in states:
+        reason = "Model not certain whether a year of birth or death exists"
+    elif any(_impossible_pair(rec) for rec in cleaned):
+        reason = "Birth year is after death year"
+    elif error:
+        reason = f"Model reported a problem: {error}"
+    elif ambiguous:
+        reason = "Nearby markers may belong to this grave and were left out"
+    else:
+        return ImageResult(status='full_success', rows=rows, reason=None, cost=cost)
+    return ImageResult(status='partial_success', rows=rows, reason=reason, cost=cost)
