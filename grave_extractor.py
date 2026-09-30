@@ -12,9 +12,12 @@ import anthropic
 from dotenv import load_dotenv
 
 from extractor.csv_writer import (
-    append_rows, check_writable, init_csv, init_processed, mark_processed, read_processed,
+    FILE_INDEX, append_rows, check_writable, csv_text, init_csv, init_processed,
+    mark_processed, read_csv, read_processed, resume_problem, rewrite_rows,
 )
-from extractor.file_utils import copy_to_byhand, extract_id, is_supported_image
+from extractor.file_utils import (
+    clear_byhand, copy_to_byhand, extract_id, is_supported_image, remove_from_byhand,
+)
 from extractor.image_processor import ImageResult, failure_row, process_image
 
 
@@ -73,6 +76,35 @@ def write_rows(output_csv: Path, rows: list[list]) -> None:
             time.sleep(CSV_LOCK_POLL_SECS)
 
 
+_RESUME_REFUSALS = {
+    "old-format": "output.csv has different columns (written by an older TRON-GRAVE version, or "
+                  "re-saved from Excel), so this run can't be resumed. Start a fresh run; back up "
+                  "the old file first if you need it.",
+    "no-processed": "output.csv has rows but .processed is missing, so resuming would re-send "
+                    "(and re-pay for) every image. Start a fresh run instead.",
+    "missing-csv": ".processed lists finished images but output.csv is missing. Restore "
+                   "output.csv, or delete .processed to start over.",
+    "unreadable": "output.csv can't be read, so this run can't be resumed.",
+}
+
+
+def resume_filter(output_dir: Path) -> set[str]:
+    """Filenames --resume skips; exits with [resume-refused] instead of silently re-sending."""
+    problem = resume_problem(output_dir)
+    if problem:
+        fatal(_RESUME_REFUSALS[problem], "resume-refused")
+    return read_processed(output_dir)
+
+
+def drop_unprocessed_rows(output_csv: Path, processed: set[str]) -> None:
+    """Remove the rows of photos about to be re-run, so none appears twice."""
+    _header, rows = read_csv(output_csv)
+    done = {csv_text(name) for name in processed}
+    keep = [row for row in rows if len(row) > FILE_INDEX and row[FILE_INDEX] in done]
+    if len(keep) != len(rows):
+        rewrite_rows(output_csv, keep)
+
+
 def main() -> int:
     signal.signal(signal.SIGINT, lambda *_: sys.exit(130))
     for _s in (sys.stdout, sys.stderr):
@@ -86,7 +118,20 @@ def main() -> int:
     if not input_dir.is_dir():
         fatal(f"Input folder not found: {input_dir}")
 
+    output_dir: Path = args.output
+    output_csv = output_dir / "output.csv"
+    byhand_dir = output_dir / "byhand"
+
     images = discover_images(input_dir)
+
+    processed: set[str] = set()
+    if args.resume:
+        processed = resume_filter(output_dir)
+        before = len(images)
+        images = [img for img in images if img.name not in processed]
+        skipped = before - len(images)
+        if skipped and args.verbose:
+            print(f"Resume: skipping {skipped} already-processed image(s).")
 
     if args.dry_run:
         for img in images:
@@ -99,29 +144,20 @@ def main() -> int:
 
     model = args.model or os.environ.get("CLAUDE_MODEL") or DEFAULT_MODEL
 
-    output_dir: Path = args.output
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
         fatal(f"Cannot create output directory {output_dir}: {e}")
 
-    output_csv = output_dir / "output.csv"
-    byhand_dir = output_dir / "byhand"
-
-    resuming = args.resume and output_csv.exists()
-    if resuming:
-        processed = read_processed(output_dir)
-        before = len(images)
-        images = [img for img in images if img.name not in processed]
-        skipped = before - len(images)
-        if skipped and args.verbose:
-            print(f"Resume: skipping {skipped} already-processed image(s).")
-    else:
-        try:
+    try:
+        if args.resume and output_csv.exists():
+            drop_unprocessed_rows(output_csv, processed)
+        else:
             init_csv(output_csv)
             init_processed(output_dir)
-        except OSError as e:
-            fatal(f"Cannot write to {output_csv}: {e}")
+            clear_byhand(byhand_dir)
+    except OSError as e:
+        fatal(f"Cannot write to {output_csv}: {e}")
 
     client = anthropic.Anthropic(api_key=api_key)
 
@@ -129,7 +165,6 @@ def main() -> int:
     succeeded = 0
     partial = 0
     failed = 0
-    byhand_count = 0
     had_any_issue = False
     total_cost = 0.0
     api_failures_in_row = 0
@@ -180,18 +215,24 @@ def main() -> int:
 
         write_rows(output_csv, result.rows)
 
+        if result.status == "full_success":
+            # A resumed photo that now reads fine no longer needs its review copy.
+            try:
+                remove_from_byhand(img, byhand_dir)
+            except OSError as e:
+                print(f"warning: could not remove {img.name} from byhand/: {e}", file=sys.stderr)
         # An API failure is not a review case: resume retries it, and a copy here would
         # have the retry button pay a stronger model to re-send it.
-        if result.status != "full_success" and not result.api_failure:
+        elif not result.api_failure:
             try:
                 copy_to_byhand(img, byhand_dir)
-                byhand_count += 1
             except OSError as e:
                 print(f"warning: could not copy {img.name} to byhand/: {e}", file=sys.stderr)
 
-        # A failed image still gets a row, so only count it done once something was
-        # actually read off the stone -- otherwise resume would skip what needs retrying.
-        if any(row[1] or row[2] for row in result.rows):
+        # Anything the model answered is done, whatever the verdict: resuming must never pay
+        # for it again (review cases wait in byhand/). API and read failures stay out of
+        # .processed, so a resume retries them.
+        if result.billed:
             mark_processed(output_dir, img)
 
         if result.status == "full_success":
@@ -213,6 +254,8 @@ def main() -> int:
     print(f"Done. {total} images processed. {succeeded} succeeded, {partial} partial, {failed} failed.")
     print(f"Total cost: ${total_cost:.2f}")
     print(f"Output:  {output_csv}")
+    byhand_count = (sum(1 for f in byhand_dir.iterdir() if f.is_file() and is_supported_image(f))
+                    if byhand_dir.is_dir() else 0)
     if byhand_count > 0:
         print(f"Review:  {byhand_dir}/ ({byhand_count} images)")
 

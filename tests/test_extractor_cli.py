@@ -10,7 +10,7 @@ from unittest import mock
 
 import grave_extractor
 from extractor import image_processor
-from extractor.csv_writer import read_csv, read_processed
+from extractor.csv_writer import CSV_COLUMNS, append_rows, read_csv, read_processed
 from tests.helpers import FakeClient, answer, api_error, jpeg_bytes, message, record
 
 
@@ -139,3 +139,99 @@ class RobustnessTests(CliCase):
         self.assertEqual(code, 2)
         self.assertIn("could not copy p_1_x.jpg", err)
         self.assertIn("p_1_x.jpg", read_processed(self.out))
+
+
+class ResumeTests(CliCase):
+    def test_resume_retries_only_api_failures_and_keeps_one_row_per_photo(self):
+        self.add_image("p_1_x.jpg")
+        self.add_image("p_2_x.jpg")
+        self.run_cli(message(answer(record())), api_error(400))
+        code, _, _, client = self.run_cli(message(answer(record(name="Ana"))), args=("--resume",))
+        self.assertEqual((code, len(client.calls)), (0, 1))
+        self.assertEqual(sorted((r[6], r[1]) for r in self.rows()),
+                         [("p_1_x.jpg", "Ivan"), ("p_2_x.jpg", "Ana")])
+
+    def test_answered_photos_are_never_sent_again(self):
+        self.add_image("p_1_x.jpg")
+        self.add_image("p_2_x.jpg")
+        self.run_cli(message(answer(error="sve nečitko")), message(answer(record(name=None, surname=None))))
+        code, _, _, client = self.run_cli(args=("--resume",))
+        self.assertEqual(client.calls, [])
+        self.assertEqual(len(self.rows()), 2)
+
+    def test_a_row_written_but_not_marked_is_rerun_once(self):
+        self.add_image("p_1_x.jpg")
+        self.run_cli(message(answer(record())))
+        # killed after writing p_2's row, before marking it processed
+        append_rows(self.out / "output.csv", [["2", "Kill", "Ed", "", "", "", "p_2_x.jpg"]])
+        self.add_image("p_2_x.jpg")
+        code, _, _, client = self.run_cli(message(answer(record(name="Ana"))), args=("--resume",))
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual([r[1] for r in self.rows() if r[6] == "p_2_x.jpg"], ["Ana"])
+
+    def test_resume_refuses_folders_it_cannot_resume_safely(self):
+        self.add_image("p_1_x.jpg")
+        self.out.mkdir()
+        cases = {
+            "old-format": ("ID,Name,Surname,Year of Birth,Year of Death,Notes\n1,A,B,,,\n", None),
+            "no-processed": (",".join(CSV_COLUMNS) + "\n1,A,B,,,,p_1_x.jpg\n", None),
+            "missing-csv": (None, "p_1_x.jpg\n"),
+        }
+        for name, (content, processed) in cases.items():
+            with self.subTest(name):
+                for f in ("output.csv", ".processed"):
+                    (self.out / f).unlink(missing_ok=True)
+                if content is not None:
+                    (self.out / "output.csv").write_text(content, encoding="utf-8-sig")
+                if processed is not None:
+                    (self.out / ".processed").write_text(processed, encoding="utf-8")
+                code, _, err, client = self.run_cli(args=("--resume",))
+                self.assertEqual((code, client.calls), (1, []))
+                self.assertIn("[resume-refused]", err)
+
+    def test_a_fresh_run_clears_old_byhand_copies(self):
+        self.add_image("p_1_x.jpg")
+        self.run_cli(message(answer(record(name=None))))
+        self.assertTrue((self.out / "byhand" / "p_1_x.jpg").exists())
+        self.run_cli(message(answer(record())))
+        self.assertFalse((self.out / "byhand" / "p_1_x.jpg").exists())
+
+    def test_a_resumed_photo_that_now_reads_fine_leaves_byhand(self):
+        img = self.add_image("p_1_x.jpg", b"not a jpeg yet")
+        self.run_cli()                       # unreadable: copied for review, not marked done
+        self.assertTrue((self.out / "byhand" / "p_1_x.jpg").exists())
+        img.write_bytes(jpeg_bytes())
+        code, _, _, client = self.run_cli(message(answer(record())), args=("--resume",))
+        self.assertEqual((code, len(client.calls), len(self.rows())), (0, 1, 1))
+        self.assertFalse((self.out / "byhand" / "p_1_x.jpg").exists())
+
+    def test_dry_run_with_resume_lists_only_what_would_run(self):
+        self.add_image("p_1_x.jpg")
+        self.add_image("p_2_x.jpg")
+        self.run_cli(message(answer(record())), api_error(400))
+        code, out, _, _ = self.run_cli(args=("--resume", "--dry-run"))
+        self.assertEqual(code, 0)
+        self.assertNotIn("p_1_x.jpg", out)
+        self.assertIn("p_2_x.jpg", out)
+
+    def test_non_ascii_names_survive_resume(self):
+        self.add_image("ploča_12_Čakovec.jpg")
+        self.add_image("ploča_13_Čakovec.jpg")
+        self.run_cli(message(answer(record())), api_error(400))
+        _, _, _, client = self.run_cli(message(answer(record(name="Ana"))), args=("--resume",))
+        self.assertEqual((len(client.calls), len(self.rows())), (1, 2))
+
+    def test_resume_with_nothing_left_finishes_cleanly(self):
+        self.add_image("p_1_x.jpg")
+        self.run_cli(message(answer(record())))
+        code, out, _, client = self.run_cli(args=("--resume",))
+        self.assertEqual((code, client.calls), (0, []))
+        self.assertIn("Done. 0 images processed", out)
+
+    def test_the_review_count_is_read_from_byhand_on_disk(self):
+        self.add_image("p_1_x.jpg")
+        self.run_cli(message(answer(record(name=None))))
+        code, out, _, client = self.run_cli(args=("--resume",))   # nothing left to run
+        self.assertEqual((code, client.calls), (0, []))
+        self.assertIn("Review:", out)
+        self.assertIn("(1 images)", out)
