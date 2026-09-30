@@ -300,8 +300,8 @@ class ImageResult:
     cost: float = 0.0
 
 
-def _empty_row(record_id: str, note: str = "") -> list:
-    return [record_id, "", "", "", "", note]
+def _empty_row(record_id: str, note: str, file_name: str) -> list:
+    return [record_id, "", "", "", "", note, file_name]
 
 
 def append_note(row: list, tag: str) -> None:
@@ -372,7 +372,7 @@ def _build_note(rec: dict, birth_state: str, death_state: str) -> str:
     return note[:_MAX_NOTE_CHARS]
 
 
-def _record_to_row(record_id: str, rec: dict, note: str = "") -> list:
+def _record_to_row(record_id: str, rec: dict, note: str, file_name: str) -> list:
     return [
         record_id,
         rec.get("name") or "",
@@ -380,6 +380,7 @@ def _record_to_row(record_id: str, rec: dict, note: str = "") -> list:
         rec.get("birth_year") if rec.get("birth_year") is not None else "",
         rec.get("death_year") if rec.get("death_year") is not None else "",
         note,
+        file_name,
     ]
 
 
@@ -505,12 +506,13 @@ def _parse_answer(response) -> dict | None:
 
 def process_image(client, model: str, path: Path, record_id: str,
                   effort: str | None = None) -> ImageResult:
+    file_name = path.name
     try:
         image_bytes, mime = prepare_image(path.read_bytes())
     except (OSError, ImageUnreadable) as e:
         return ImageResult(
             status='total_failure',
-            rows=[_empty_row(record_id, "ne mogu otvoriti")],
+            rows=[_empty_row(record_id, "ne mogu otvoriti", file_name)],
             reason=f"File could not be read or decoded: {e}",
         )
 
@@ -534,7 +536,7 @@ def process_image(client, model: str, path: Path, record_id: str,
             else:
                 return ImageResult(
                     status='total_failure',
-                    rows=[_empty_row(record_id, "greška API-ja")],
+                    rows=[_empty_row(record_id, "greška API-ja", file_name)],
                     reason=str(e),
                     fatal_api_error=status_code in _FATAL_STATUS_CODES,
                 )
@@ -545,7 +547,7 @@ def process_image(client, model: str, path: Path, record_id: str,
     if response is None:
         return ImageResult(
             status='total_failure',
-            rows=[_empty_row(record_id, "greška API-ja")],
+            rows=[_empty_row(record_id, "greška API-ja", file_name)],
             reason=f"API call failed after retries: {last_error}",
         )
 
@@ -553,15 +555,15 @@ def process_image(client, model: str, path: Path, record_id: str,
     # model extracted the data -- attach the real cost to every return from here on.
     cost = compute_cost(model, response.usage)
 
-    return _classify(response, cost, record_id)
+    return _classify(response, cost, record_id, file_name)
 
 
-def _classify(response, cost: float, record_id: str) -> ImageResult:
+def _classify(response, cost: float, record_id: str, file_name: str) -> ImageResult:
     """Turn one answered (and billed) API call into CSV rows and a verdict."""
     if response.stop_reason == "refusal":
         return ImageResult(
             status='total_failure',
-            rows=[_empty_row(record_id, "odbijeno")],
+            rows=[_empty_row(record_id, "odbijeno", file_name)],
             reason="Model declined to answer (refusal)",
             cost=cost,
         )
@@ -571,7 +573,7 @@ def _classify(response, cost: float, record_id: str) -> ImageResult:
     if response.stop_reason == "max_tokens":
         return ImageResult(
             status='total_failure',
-            rows=[_empty_row(record_id, "odgovor prekinut")],
+            rows=[_empty_row(record_id, "odgovor prekinut", file_name)],
             reason="Response hit the max_tokens ceiling before the answer finished",
             cost=cost,
         )
@@ -580,7 +582,7 @@ def _classify(response, cost: float, record_id: str) -> ImageResult:
     if data is None:
         return ImageResult(
             status='total_failure',
-            rows=[_empty_row(record_id, "neispravan odgovor")],
+            rows=[_empty_row(record_id, "neispravan odgovor", file_name)],
             reason=f"Model returned no valid JSON answer (stop_reason: {response.stop_reason})",
             cost=cost,
         )
@@ -591,7 +593,7 @@ def _classify(response, cost: float, record_id: str) -> ImageResult:
     if error is not None and not records:
         return ImageResult(
             status='total_failure',
-            rows=[_empty_row(record_id, (error or "").strip()[:_MAX_NOTE_CHARS])],
+            rows=[_empty_row(record_id, (error or "").strip()[:_MAX_NOTE_CHARS], file_name)],
             reason=error,
             cost=cost,
         )
@@ -599,7 +601,7 @@ def _classify(response, cost: float, record_id: str) -> ImageResult:
     if not records:
         return ImageResult(
             status='total_failure',
-            rows=[_empty_row(record_id, "nema podataka")],
+            rows=[_empty_row(record_id, "nema podataka", file_name)],
             reason="Model returned no records",
             cost=cost,
         )
@@ -611,7 +613,7 @@ def _classify(response, cost: float, record_id: str) -> ImageResult:
     if all_empty:
         return ImageResult(
             status='total_failure',
-            rows=[_empty_row(record_id, "sve nečitko")],
+            rows=[_empty_row(record_id, "sve nečitko", file_name)],
             reason="All fields illegible",
             cost=cost,
         )
@@ -620,7 +622,7 @@ def _classify(response, cost: float, record_id: str) -> ImageResult:
     birth_states = [_birth_state(rec) for rec in records]
     death_states = [_death_state(rec) for rec in records]
     rows = [
-        _record_to_row(record_id, rec, _build_note(rec, bs, ds))
+        _record_to_row(record_id, rec, _build_note(rec, bs, ds), file_name)
         for rec, bs, ds in zip(records, birth_states, death_states)
     ]
 

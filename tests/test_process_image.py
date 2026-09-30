@@ -83,3 +83,11 @@ class AnswerTests(ProcessImageCase):
                "ambiguous_multiple_markers": False}
         result, _ = self.run_image(message(bad))
         self.assertEqual(result.rows[0][5], "neispravan odgovor")
+
+
+class FileColumnTests(ProcessImageCase):
+    def test_rows_end_with_the_photos_file_name(self):
+        ok, _ = self.run_image(message(answer(record(), record(name="Mara"))))
+        self.assertEqual([row[6] for row in ok.rows], [self.img.name, self.img.name])
+        failed, _ = self.run_image(message(text="not json"))
+        self.assertEqual(failed.rows[0][6], self.img.name)
