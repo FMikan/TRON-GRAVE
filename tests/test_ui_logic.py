@@ -233,3 +233,14 @@ class EstimateTests(unittest.TestCase):
     def test_hand_edited_stats_fall_back_quietly(self):
         stats = {"claude-sonnet-5|high": {"cost": "x", "secs": 1, "n": 2}}
         self.assertFalse(ui_logic.estimate(stats, "claude-sonnet-5", "high", 1)[2])
+
+    def test_stats_that_are_not_finite_fall_back_quietly(self):
+        # json reads a hand-edited NaN or Infinity, and either one would crash the duration text
+        for entry in ({"cost": float("nan"), "secs": 5.0, "n": 2},
+                      {"cost": 1.0, "secs": float("inf"), "n": 2}):
+            with self.subTest(entry=entry):
+                stats = {"claude-sonnet-5|high": entry}
+                cost, secs, measured = ui_logic.estimate(stats, "claude-sonnet-5", "high", 1)
+                self.assertFalse(measured)
+                self.assertEqual((cost, secs), (ui_logic.fallback_cost_per_image("claude-sonnet-5"),
+                                                ui_logic.SECS_PER_IMAGE_GUESS))

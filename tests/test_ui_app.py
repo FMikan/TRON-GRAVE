@@ -408,6 +408,21 @@ class EstimateAppTests(AppCase):
         entry = self.saved()["stats"]["claude-opus-5-5|max"]
         self.assertEqual((entry["n"], entry["secs"]), (1, 10.0))
 
+    def test_saved_stats_that_are_not_finite_leave_the_preview_working(self):
+        # json reads a hand-edited NaN back, and the preview refreshes from __init__
+        inp = self.tmp / "in"
+        inp.mkdir()
+        (inp / "a.jpg").write_bytes(b"x")
+        self.settings_path.parent.mkdir(parents=True)
+        nan = float("nan")
+        self.settings_path.write_text(
+            json.dumps({"stats": {"claude-sonnet-5|high": {"cost": nan, "secs": nan, "n": 2}}}),
+            encoding="utf-8")
+        self.app._load_settings()
+        self.app.input_var.set(str(inp))
+        self.app._refresh_preview()
+        self.assertIn("gruba procjena", self.app.preview_var.get())
+
 
 class RunModelTests(RunCase):
     """The estimate files a run under _run_model/_run_effort, so every launch must set them."""

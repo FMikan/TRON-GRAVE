@@ -2,6 +2,7 @@
 
 import csv
 import json
+import math
 import os
 import re
 import sys
@@ -250,7 +251,10 @@ def estimate(stats, model: str, effort: str, count: int) -> tuple[float, float, 
     entry = stats.get(f"{model}|{effort}") if isinstance(stats, dict) else None
     try:
         if entry and entry["n"] > 0:
-            return count * entry["cost"] / entry["n"], count * entry["secs"] / entry["n"], True
+            cost = count * entry["cost"] / entry["n"]
+            secs = count * entry["secs"] / entry["n"]
+            if math.isfinite(cost) and math.isfinite(secs):   # json reads a hand-edited NaN/Infinity
+                return cost, secs, True
     except (KeyError, TypeError, ZeroDivisionError):
         pass   # a hand-edited settings file: fall back to the rough guess
     return count * fallback_cost_per_image(model), count * SECS_PER_IMAGE_GUESS, False
