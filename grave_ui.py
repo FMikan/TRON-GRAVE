@@ -1013,20 +1013,26 @@ class App:
     def _on_retry_byhand(self):
         out_dir = Path(self.output_var.get())
         byhand_dir = out_dir / "byhand"
-        n = 0
-        if byhand_dir.is_dir():
-            n = sum(1 for f in byhand_dir.iterdir() if f.is_file() and is_supported_image(f))
+        try:
+            n = (sum(1 for f in byhand_dir.iterdir() if f.is_file() and is_supported_image(f))
+                 if byhand_dir.is_dir() else 0)
+        except OSError:
+            n = 0
         if n == 0:
             messagebox.showinfo("Nema slika", "Nema slika u byhand/ za ponovnu obradu.")
             return
 
+        model, effort = ui_logic.retry_settings(self._model_id(), self._effort_id())
+        cost, _secs, _measured = ui_logic.estimate(self._settings.get("stats"), model, effort, n)
         retry_out = out_dir / "byhand_retry"
         if not messagebox.askyesno(
             "Ponovna obrada",
-            f"Ponovno obraditi slike iz byhand/ (ukupno: {n}) modelom "
-            f"{ui_logic.MODEL_LABELS[ui_logic.RETRY_MODEL]}?\n\n"
-            "Ovo su novi, plaćeni API pozivi.\n"
-            f"Rezultati idu u zasebnu mapu: {retry_out}",
+            f"Ponovno obraditi slike iz byhand/ (ukupno: {n})?\n\n"
+            f"Model: {ui_logic.MODEL_LABELS.get(model, model)}, "
+            f"napor: {ui_logic.EFFORT_LABELS.get(effort, effort)}\n"
+            f"Procjena: ~${cost:.2f}\n\n"
+            "Ovo su novi, plaćeni API pozivi. Rezultati idu u zasebnu mapu:\n"
+            f"{retry_out}",
         ):
             return
 
@@ -1038,29 +1044,7 @@ class App:
             )
             return
         self._api_key = api_key
-
-        try:
-            retry_out.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            messagebox.showerror("Ne mogu stvoriti izlaznu mapu", str(e))
-            return
-
-        self._reset_run_state()
-        self._set_running(True)
-        self._is_retry_run = True
-        self._run_out_dir = retry_out
-        self._run_model, self._run_effort = ui_logic.RETRY_MODEL, ui_logic.RETRY_EFFORT
-        self._launched_dry_run = False
-
-        cmd = [
-            *_EXTRACTOR_CMD,
-            "--input", str(byhand_dir),
-            "--output", str(retry_out),
-            "--verbose",
-            "--model", ui_logic.RETRY_MODEL,
-            "--effort", ui_logic.RETRY_EFFORT,
-        ]
-        self._launch_subprocess(cmd)
+        self._start_in(byhand_dir, retry_out, model, effort, retry=True)
 
     def _on_close(self):
         if self.proc and self.proc.poll() is None:

@@ -274,3 +274,14 @@ def record_run(stats, model: str, effort: str, cost: float, secs: float, n: int)
     except (TypeError, ValueError):
         stats[key] = {"cost": cost, "secs": secs, "n": n}
     return stats
+
+
+# ---- retry ------------------------------------------------------------------------------
+
+def retry_settings(model: str, effort: str) -> tuple[str, str]:
+    """Model and effort for "Ponovi byhand/": Opus 5.5 at high, or the selection if stronger."""
+    rank = {m: i for i, m in enumerate(MODELS)}
+    retry_model = model if rank.get(model, -1) > rank[RETRY_MODEL] else RETRY_MODEL
+    stronger_effort = (effort in EFFORT_LEVELS
+                       and EFFORT_LEVELS.index(effort) > EFFORT_LEVELS.index(RETRY_EFFORT))
+    return retry_model, effort if stronger_effort else RETRY_EFFORT

@@ -244,3 +244,12 @@ class EstimateTests(unittest.TestCase):
                 self.assertFalse(measured)
                 self.assertEqual((cost, secs), (ui_logic.fallback_cost_per_image("claude-sonnet-5"),
                                                 ui_logic.SECS_PER_IMAGE_GUESS))
+
+
+class RetrySettingsTests(unittest.TestCase):
+    def test_retry_never_steps_down(self):
+        retry = ui_logic.retry_settings
+        self.assertEqual(retry("claude-sonnet-5", "low"), ("claude-opus-5-5", "high"))
+        self.assertEqual(retry("claude-fable-5-1", "max"), ("claude-fable-5-1", "max"))
+        self.assertEqual(retry("claude-opus-5", "xhigh"), ("claude-opus-5-5", "xhigh"))
+        self.assertEqual(retry("unknown", "weird"), ("claude-opus-5-5", "high"))

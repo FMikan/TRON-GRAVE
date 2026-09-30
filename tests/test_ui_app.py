@@ -440,3 +440,50 @@ class RunModelTests(RunCase):
         self.app._on_retry_byhand()
         self.assertEqual((self.app._run_model, self.app._run_effort),
                          (ui_logic.RETRY_MODEL, ui_logic.RETRY_EFFORT))
+
+    def test_a_stronger_selection_is_what_a_byhand_retry_is_filed_under(self):
+        byhand = self.out / "byhand"
+        byhand.mkdir(parents=True)
+        (byhand / "p_1_x.jpg").write_bytes(jpeg_bytes())
+        self.app.model_var.set(ui_logic.MODEL_LABELS["claude-fable-5-1"])
+        self.app.effort_var.set(ui_logic.EFFORT_LABELS["max"])
+        self.app._on_retry_byhand()
+        self.assertEqual((self.app._run_model, self.app._run_effort), ("claude-fable-5-1", "max"))
+
+
+class RetryTests(RunCase):
+    def setUp(self):
+        super().setUp()
+        byhand = self.out / "byhand"
+        byhand.mkdir(parents=True)
+        for name in ("p_1_x.jpg", "p_2_x.jpg"):
+            (byhand / name).write_bytes(jpeg_bytes())
+        self.retry_out = self.out / "byhand_retry"
+
+    def test_retry_shows_model_and_estimate_then_runs_into_byhand_retry(self):
+        self.app.model_var.set(ui_logic.MODEL_LABELS["claude-fable-5-1"])
+        self.app._on_retry_byhand()
+        body = self.dialogs["askyesno"].call_args[0][1]
+        self.assertIn("Claude Fable 5.1", body)
+        self.assertIn("Procjena: ~$", body)
+        cmd = self.launched[-1]
+        self.assertEqual(cmd[cmd.index("--model") + 1], "claude-fable-5-1")
+        self.assertEqual(Path(cmd[cmd.index("--output") + 1]), self.retry_out)
+        self.assertTrue((self.retry_out / ".tron-grave.lock").exists())
+
+    def test_a_second_retry_asks_before_touching_earlier_results(self):
+        self.retry_out.mkdir()
+        init_csv(self.retry_out / "output.csv")
+        append_rows(self.retry_out / "output.csv", [["1", "Ivan", "Horvat", 1920, 1999, "", "p_1_x.jpg"]])
+        init_processed(self.retry_out)
+        mark_processed(self.retry_out, Path("p_1_x.jpg"))
+        with mock.patch.object(grave_ui.App, "_ask_existing_output", return_value="resume") as ask:
+            self.app._on_retry_byhand()
+        ask.assert_called_once()
+        self.assertIn("--resume", self.launched[-1])
+
+    def test_a_stopped_retry_points_back_to_the_retry_button(self):
+        self.app._on_retry_byhand()
+        self.app._stop_requested = True
+        self.app._on_proc_exit(130)
+        self.assertIn("Ponovi byhand/", self.dialogs["showinfo"].call_args[0][1])
