@@ -276,3 +276,54 @@ class ResumeTests(CliCase):
         self.assertEqual((code, client.calls), (0, []))
         self.assertIn("Review:", out)
         self.assertIn("(1 images)", out)
+
+
+class InputTests(CliCase):
+    def test_skipped_heic_photos_are_reported_and_dotfiles_ignored(self):
+        self.add_image("p_1_x.jpg")
+        self.add_image("p_2_x.HEIC", b"heic")
+        self.add_image("._p_3_x.jpg", b"appledouble")
+        code, _, err, client = self.run_cli(message(answer(record())))
+        self.assertEqual((code, len(client.calls)), (0, 1))
+        self.assertIn("skipping 1 .heic/.heif file(s)", err)
+
+    def test_the_outputs_byhand_folder_is_refused_as_input(self):
+        self.inp = self.out / "byhand"
+        self.inp.mkdir(parents=True)
+        self.add_image("p_1_x.jpg")
+        code, _, err, client = self.run_cli()
+        self.assertEqual((code, client.calls), (1, []))
+        self.assertIn("[input-is-byhand]", err)
+
+    def test_an_unpriced_model_gets_a_cost_warning(self):
+        self.add_image("p_1_x.jpg")
+        _, _, err, _ = self.run_cli(message(answer(record())), args=("--model", "claude-haiku-9"))
+        self.assertIn("no price table entry for claude-haiku-9", err)
+
+    def test_a_priced_model_and_supported_photos_print_no_warnings(self):
+        self.add_image("p_1_x.jpg")
+        _, _, err, _ = self.run_cli(message(answer(record())), args=("--model", "claude-sonnet-5-5"))
+        self.assertEqual(err, "")
+
+    def test_byhand_reached_by_another_path_is_refused_before_anything_is_touched(self):
+        (self.out / "elsewhere").mkdir(parents=True)
+        self.inp = self.out / "byhand"
+        self.inp.mkdir()
+        photo = self.add_image("p_1_x.jpg")
+        old_csv = self.out / "output.csv"
+        old_csv.write_text("old run", encoding="utf-8")
+        self.inp = self.out / "elsewhere" / ".." / "byhand"
+        code, _, err, client = self.run_cli()
+        self.assertEqual((code, client.calls), (1, []))
+        self.assertIn("[input-is-byhand]", err)
+        self.assertTrue(photo.exists())                                   # not cleared
+        self.assertEqual(old_csv.read_text(encoding="utf-8"), "old run")  # not replaced
+
+    def test_the_byhand_refusal_comes_before_the_resume_checks(self):
+        self.inp = self.out / "byhand"
+        self.inp.mkdir(parents=True)
+        self.add_image("p_1_x.jpg")
+        (self.out / "output.csv").write_text("old run", encoding="utf-8")   # --resume alone refuses this
+        code, _, err, client = self.run_cli(args=("--resume",))
+        self.assertEqual((code, client.calls), (1, []))
+        self.assertIn("[input-is-byhand]", err)

@@ -16,9 +16,10 @@ from extractor.csv_writer import (
     mark_processed, read_csv, read_processed, resume_problem, rewrite_rows,
 )
 from extractor.file_utils import (
-    clear_byhand, copy_to_byhand, extract_id, is_supported_image, remove_from_byhand,
+    clear_byhand, copy_to_byhand, extract_id, is_heic, is_supported_image, remove_from_byhand,
 )
 from extractor.image_processor import ImageResult, failure_row, process_image
+from extractor.pricing import MODEL_PRICING
 
 
 DEFAULT_MODEL = "claude-sonnet-5"
@@ -52,8 +53,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def discover_images(input_dir: Path) -> list[Path]:
-    return sorted(p for p in input_dir.iterdir() if p.is_file() and is_supported_image(p))
+def discover_images(input_dir: Path) -> tuple[list[Path], int]:
+    """Supported photos in the folder (sorted), and how many HEIC/HEIF files were skipped."""
+    files = [p for p in input_dir.iterdir() if p.is_file()]
+    return sorted(p for p in files if is_supported_image(p)), sum(1 for p in files if is_heic(p))
 
 
 def fatal(msg: str, tag: str | None = None) -> None:
@@ -126,7 +129,14 @@ def main() -> int:
     output_csv = output_dir / "output.csv"
     byhand_dir = output_dir / "byhand"
 
-    images = discover_images(input_dir)
+    if input_dir.resolve() == byhand_dir.resolve():
+        fatal("The input folder is this output folder's byhand/ folder. Choose a different "
+              "output folder.", "input-is-byhand")
+
+    images, heic_count = discover_images(input_dir)
+    if heic_count:
+        print(f"warning: skipping {heic_count} .heic/.heif file(s); convert them to JPG first",
+              file=sys.stderr)
 
     if args.resume:
         processed = resume_filter(output_dir)
@@ -146,6 +156,9 @@ def main() -> int:
         fatal("ANTHROPIC_API_KEY is not set. Copy .env.example to .env and add your key.")
 
     model = args.model or os.environ.get("CLAUDE_MODEL") or DEFAULT_MODEL
+    if model not in MODEL_PRICING:
+        print(f"warning: no price table entry for {model}; costs shown assume $3/$15 per "
+              "million tokens", file=sys.stderr)
 
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
