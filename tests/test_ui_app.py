@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import tkinter as tk
 import unittest
 from pathlib import Path
@@ -351,9 +352,9 @@ class ExistingOutputTests(RunCase):
         win.btn_fresh.invoke()
         self.assertEqual(choice["value"], "fresh")
 
-    def open_dialog(self):
+    def open_dialog(self, csv_path=Path("x/output.csv")):
         """The Nastavi / Prepiši / Odustani dialog with nothing blocking it, never mapped."""
-        win, choice = self.app._build_existing_output_dialog(Path("x/output.csv"), 3, 1, 2, None)
+        win, choice = self.app._build_existing_output_dialog(csv_path, 3, 1, 2, None)
         win.withdraw()
         self.addCleanup(lambda: win.winfo_exists() and win.destroy())
         return win, choice
@@ -364,6 +365,14 @@ class ExistingOutputTests(RunCase):
         win.btn_resume.invoke()
         self.assertEqual(choice["value"], "resume")
         self.assertFalse(win.winfo_exists())
+
+    def test_a_long_output_path_wraps_instead_of_widening_the_dialog(self):
+        win, _choice = self.open_dialog(Path("x" * 289, "output.csv"))      # 300 characters
+        win.update_idletasks()
+        self.assertLess(win.winfo_reqwidth(), 700)
+        # the second label holds no path and fits at normal font sizes, so check its wrap directly
+        labels = [w for w in win.winfo_children()[0].winfo_children() if isinstance(w, ttk.Label)]
+        self.assertEqual([str(label.cget("wraplength")) for label in labels], ["520", "520"])
 
     # Escape is bound to the same pick(None), but Tk delivers no key event to a window that is
     # never mapped, so it is left untested rather than flashing the dialog on screen.
@@ -751,3 +760,93 @@ class SummaryTests(AppCase):
                     self.root.tk.eval(script)
                 except tk.TclError as e:
                     self.fail(f"the popup's timer fires on a deleted command: {e}")
+
+
+class LayoutTests(AppCase):
+    def test_the_window_cannot_shrink_below_the_control_row(self):
+        self.root.update_idletasks()        # until the widgets are laid out, every requested width reads 1
+        min_width, _ = self.root.minsize()
+        self.assertGreaterEqual(min_width, self.app.btn_retry_byhand.master.winfo_reqwidth())
+
+    def test_search_opens_with_caps_lock_and_on_a_mac(self):
+        for sequence in ("<Control-f>", "<Control-F>", "<Command-f>"):
+            self.assertTrue(self.root.bind(sequence), sequence)
+
+    def test_cmd_q_on_a_mac_goes_through_the_close_check(self):
+        root = tk.Tk()
+        root.withdraw()
+        self.addCleanup(root.destroy)
+        with mock.patch.object(grave_ui.sys, "platform", "darwin"), \
+                mock.patch.object(grave_ui.App, "_on_close") as on_close:
+            grave_ui.App(root)
+        root.tk.call("tk::mac::Quit")               # the command Tk runs on Cmd+Q
+        on_close.assert_called_once()
+
+    def test_the_log_uses_themed_scrollbars(self):
+        bars = [w for w in self.app.log.master.winfo_children() if isinstance(w, ttk.Scrollbar)]
+        self.assertEqual(len(bars), 2)
+
+    def test_disabled_controls_look_disabled(self):
+        style = ttk.Style(self.root)
+        for widget_style in ("TCombobox", "TCheckbutton"):
+            self.assertEqual(style.lookup(widget_style, "foreground", ["disabled"]), "#5b606b")
+
+    def test_the_unused_label_styles_are_gone(self):
+        source = Path(grave_ui.__file__).read_text(encoding="utf-8")
+        for name in ("Title.TLabel", "Subtitle.TLabel", "Muted.TLabel"):
+            self.assertNotIn(name, source)
+
+
+class CloseTests(AppCase):
+    def test_closing_during_a_run_does_not_freeze_the_window(self):
+        self.app.proc = mock.Mock()
+        self.app.proc.poll.return_value = None
+        with mock.patch.object(grave_ui.App, "_terminate_run"), \
+                mock.patch.object(self.root, "destroy") as destroy:
+            self.app._on_close()
+            destroy.assert_not_called()           # waits for the extractor instead of blocking
+            self.app.proc.poll.return_value = 0
+            self.app._close_when_stopped(float("inf"))
+            destroy.assert_called_once()
+        self.app.proc = None
+
+    def test_closing_asks_once_and_marks_the_coming_exit_as_a_stop(self):
+        self.app.proc = mock.Mock()
+        self.app.proc.poll.return_value = None
+        with mock.patch.object(grave_ui.App, "_terminate_run"), \
+                mock.patch.object(self.root, "destroy"):
+            self.app._on_close()
+            self.app._on_close()                      # a second click while the extractor stops
+        self.dialogs["askyesno"].assert_called_once()
+        self.assertTrue(self.app._closing)
+        self.assertTrue(self.app._stop_requested)     # so the exit counts as a stop, and its stats are kept
+        self.app.proc = None
+
+    def test_an_extractor_still_running_at_the_deadline_is_killed_before_the_lock_is_let_go(self):
+        order = []
+        self.app.proc = mock.Mock()
+        self.app.proc.poll.return_value = None        # it never stops
+        with mock.patch.object(grave_ui.App, "_atexit_kill", lambda app: order.append("kill")), \
+                mock.patch.object(grave_ui.App, "_release_lock", lambda app: order.append("release")), \
+                mock.patch.object(self.root, "destroy", lambda: order.append("destroy")):
+            self.app._close_when_stopped(time.monotonic() + 60)
+            self.assertEqual(order, [])               # inside the deadline it only waits
+            self.app._close_when_stopped(time.monotonic() - 1)
+        self.assertEqual(order, ["kill", "release", "destroy"])
+        self.app.proc = None
+
+    def test_a_run_stopped_by_closing_still_teaches_the_estimate_but_shows_nothing(self):
+        self.app._reset_run_state()
+        self.app._run_model, self.app._run_effort = "claude-sonnet-5", "high"
+        for line in ("[1/3] Processing a.jpg ...", "[1/3] OK: a.jpg (1 record) — $0.2500 (total: $0.25)",
+                     "[2/3] Processing b.jpg ..."):
+            self.app._handle_line("stdout", line + "\n")
+        self.app._closing = True
+        self.app._stop_requested = True
+        self.app._on_proc_exit(130)
+        stats = json.loads(self.settings_path.read_text(encoding="utf-8"))["stats"]
+        self.assertEqual(stats["claude-sonnet-5|high"]["n"], 1)
+        self.app._draw_attention.assert_not_called()
+        for name, dialog in self.dialogs.items():
+            with self.subTest(dialog=name):
+                dialog.assert_not_called()

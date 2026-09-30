@@ -13,7 +13,6 @@ import tkinter as tk
 import traceback
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-from tkinter.scrolledtext import ScrolledText
 
 from dotenv import dotenv_values
 
@@ -45,7 +44,6 @@ class App:
         # Wide enough for the full control row: Start/Stop, the dry-run checkbox, and the three
         # Open/Retry buttons. At 960 the last button was clipped off-screen.
         self.root.geometry("1180x700")
-        self.root.minsize(900, 460)
 
         self.input_var = tk.StringVar()
         self.output_var = tk.StringVar()
@@ -74,6 +72,7 @@ class App:
         self._run_model = ui_logic.DEFAULT_MODEL
         self._run_effort = ui_logic.DEFAULT_EFFORT
         self._stop_requested = False
+        self._closing = False
         self._launched_dry_run = False
         self._saw_done_line = False
         self._last_stderr = ""
@@ -88,6 +87,9 @@ class App:
         self._build_ui()
         self.root.report_callback_exception = self._report_callback_exception
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        if sys.platform == "darwin":
+            # Cmd+Q bypasses WM_DELETE_WINDOW on macOS; route it through the same check.
+            self.root.createcommand("tk::mac::Quit", self._on_close)
         atexit.register(self._atexit_kill)
         self.root.after(50, self._drain_queue)
         self._refresh_preview()
@@ -126,9 +128,6 @@ class App:
 
         style.configure("TFrame", background=BG)
         style.configure("TLabel", background=BG, foreground=TEXT, font=base_font)
-        style.configure("Title.TLabel", font=("Segoe UI Semibold", 18), foreground=TEXT)
-        style.configure("Subtitle.TLabel", font=("Segoe UI", 10), foreground=MUTED)
-        style.configure("Muted.TLabel", foreground=MUTED)
 
         style.configure("TButton", background=INPUT, foreground=TEXT,
                         borderwidth=0, padding=(14, 8), font=base_font)
@@ -152,8 +151,9 @@ class App:
         style.configure("TCombobox", fieldbackground=INPUT, background=INPUT,
                         foreground=TEXT, arrowcolor=TEXT, bordercolor=BORDER, padding=5)
         style.map("TCombobox",
-                  fieldbackground=[("readonly", INPUT)],
-                  foreground=[("readonly", TEXT)],
+                  fieldbackground=[("disabled", DISABLED_BG), ("readonly", INPUT)],
+                  foreground=[("disabled", DISABLED_FG), ("readonly", TEXT)],
+                  background=[("disabled", DISABLED_BG), ("pressed", HOVER), ("active", HOVER)],
                   bordercolor=[("focus", ACCENT)],
                   arrowcolor=[("disabled", DISABLED_FG)])
         self.root.option_add("*TCombobox*Listbox.background", SURFACE)
@@ -162,7 +162,7 @@ class App:
         self.root.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
 
         style.configure("TCheckbutton", background=BG, foreground=TEXT)
-        style.map("TCheckbutton", background=[("active", BG)])
+        style.map("TCheckbutton", background=[("active", BG)], foreground=[("disabled", DISABLED_FG)])
 
         style.configure("TProgressbar", troughcolor=INPUT, background=ACCENT,
                         bordercolor=BG, lightcolor=ACCENT, darkcolor=ACCENT, thickness=8)
@@ -278,7 +278,7 @@ class App:
         log_frame.rowconfigure(0, weight=1)
         log_frame.columnconfigure(0, weight=1)
 
-        self.log = ScrolledText(
+        self.log = tk.Text(
             log_frame, wrap="none", height=15, borderwidth=0, relief="flat",
             font=("Consolas", 10), state="disabled",
             background="#15171c", foreground="#e6e6e6", insertbackground="#e6e6e6",
@@ -290,9 +290,12 @@ class App:
         self.log.tag_config("done", foreground="#7ee787")
         self.log.tag_config("search", background="#4a3a00")
 
+        # ttk scrollbars, so both follow the dark theme (ScrolledText's are classic light ones).
+        vbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.log.yview)
+        vbar.grid(row=0, column=1, sticky="ns")
         hbar = ttk.Scrollbar(log_frame, orient="horizontal", command=self.log.xview)
         hbar.grid(row=1, column=0, sticky="ew")
-        self.log.configure(xscrollcommand=hbar.set)
+        self.log.configure(xscrollcommand=hbar.set, yscrollcommand=vbar.set)
 
         self.search_frame = ttk.Frame(self.root)
         ttk.Label(self.search_frame, text="Traži:").pack(side="left", padx=(8, 4))
@@ -302,8 +305,15 @@ class App:
         ttk.Button(self.search_frame, text="Zatvori", command=self._hide_search).pack(side="left", padx=(4, 8))
         self._search_entry.bind("<Return>", lambda _e: self._search_next())
 
-        self.root.bind("<Control-f>", lambda _e: self._show_search())
+        # Caps Lock turns Ctrl+F into keysym F; macOS users press Cmd+F.
+        for sequence in ("<Control-f>", "<Control-F>", "<Command-f>"):
+            self.root.bind(sequence, lambda _e: self._show_search())
         self.root.bind("<Escape>", lambda _e: self._hide_search())
+
+        # Never narrower than the control row: the Croatian labels are long and fonts differ
+        # per OS and DPI, so a fixed minimum cut off the last button.
+        self.root.update_idletasks()
+        self.root.minsize(max(900, ctrl.winfo_reqwidth() + 28), 460)
 
     # ----- model / effort ---------------------------------------------------
 
@@ -534,12 +544,12 @@ class App:
         frm = ttk.Frame(win, padding=16)
         frm.grid(row=0, column=0, sticky="nsew")
         ttk.Label(
-            frm, justify="left",
+            frm, justify="left", wraplength=520,
             text=f"{csv_path} već postoji (redaka: {rows}).\n"
                  f"Već obrađeno: {done}/{total} slika iz ulazne mape.",
         ).grid(row=0, column=0, columnspan=3, sticky="w")
         ttk.Label(
-            frm, justify="left", foreground="#9aa0a6",
+            frm, justify="left", foreground="#9aa0a6", wraplength=520,
             text="Nastavi — obradi samo preostale slike i dopiši ih.\n"
                  "Prepiši — spremi kopiju (output.<vrijeme>.bak.csv i byhand.<vrijeme>.bak) "
                  "i kreni ispočetka.",
@@ -918,11 +928,13 @@ class App:
         self._release_lock()
         # The results exist whatever the exit code was; never leave them behind dead buttons.
         self._refresh_output_buttons()
+        # Only a finished or a stopped run teaches the estimate: a failed or killed one ends on
+        # errors (an api-down run, on three retried unbilled photos) that skew both averages.
+        if not is_dry and outcome in ("done", "stopped"):
+            self._record_stats()
+        if self._closing:
+            return                      # the window is closing: no attention, no dialogs
         if not is_dry:
-            # Only a finished or a stopped run teaches the estimate: a failed or killed one ends on
-            # errors (an api-down run, on three retried unbilled photos) that skew both averages.
-            if outcome in ("done", "stopped"):
-                self._record_stats()
             self._draw_attention()
 
         ok = self.counters["ok"]
@@ -1061,6 +1073,8 @@ class App:
         self._start_in(byhand_dir, retry_out, model, effort, retry=True)
 
     def _on_close(self):
+        if self._closing:
+            return
         if self.proc and self.proc.poll() is None:
             done = self.counters["ok"] + self.counters["partial"] + self.counters["failed"]
             if not messagebox.askyesno(
@@ -1068,7 +1082,23 @@ class App:
                 f"Obrada je u tijeku (gotovo: {done}).\nIzaći i zaustaviti obradu?",
             ):
                 return
-            self._terminate_run()
+            # Stop on a worker thread and close once the extractor is gone: stopping can take
+            # seconds (up to ~18 s on Windows), and a frozen window looks like a crash.
+            self._closing = True
+            self._stop_requested = True
+            self.status_var.set("Zaustavljam obradu…")
+            threading.Thread(target=self._terminate_run, daemon=True).start()
+            self._close_when_stopped(time.monotonic() + 20)
+            return
+        self._release_lock()
+        self.root.destroy()
+
+    def _close_when_stopped(self, deadline: float):
+        if self.proc is not None and self.proc.poll() is None:
+            if time.monotonic() <= deadline:
+                self.root.after(100, lambda: self._close_when_stopped(deadline))
+                return
+            self._atexit_kill()     # still running at the deadline: kill it before letting go of the lock
         self._release_lock()
         self.root.destroy()
 
