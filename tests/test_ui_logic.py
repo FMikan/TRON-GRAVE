@@ -117,3 +117,18 @@ class SettingsTests(unittest.TestCase):
         # older Pythons re-raise PermissionError from Path.exists() for a folder they cannot enter
         with mock.patch.object(Path, "exists", side_effect=PermissionError):
             self.assertEqual(ui_logic.load_settings(self.tmp / "ui.json", self.tmp / "none.json"), {})
+
+
+class LockTests(unittest.TestCase):
+    def test_only_the_owner_removes_the_lock(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        lock = tmp / "Groblje Čakovec" / ui_logic.LOCK_NAME
+        lock.parent.mkdir()
+        mine = ui_logic.new_lock_token()
+        lock.write_text(mine, encoding="utf-8")
+        ui_logic.release_lock(lock, "someone:else")
+        self.assertTrue(lock.exists())
+        ui_logic.release_lock(lock, mine)
+        self.assertFalse(lock.exists())
+        ui_logic.release_lock(lock, mine)          # already gone: no error

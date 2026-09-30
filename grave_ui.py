@@ -85,10 +85,11 @@ class App:
         self.last_total: int | None = None
         self.counters = {"ok": 0, "partial": 0, "failed": 0}
         self.total_cost = 0.0
-        self.lockfile_path: Path | None = None
+        self.lock_path: Path | None = None
+        self.lock_token: str | None = None
         self._search_index = "1.0"
         self._is_retry_run = False
-        self._retry_out_dir: Path | None = None
+        self._run_out_dir: Path | None = None
         self._stop_requested = False
         self._launched_dry_run = False
         self._saw_done_line = False
@@ -417,13 +418,13 @@ class App:
     def _on_start(self):
         in_path = self.input_var.get().strip()
         out_path = self.output_var.get().strip()
+        dry = self.dry_run_var.get()
 
-        if not in_path or not out_path:
+        if not in_path or not (out_path or dry):
             messagebox.showwarning("Nedostaje mapa", "Odaberite ulaznu i izlaznu mapu.")
             return
 
         in_dir = Path(in_path)
-        out_dir = Path(out_path)
         if not in_dir.is_dir():
             messagebox.showerror("Neispravna ulazna mapa", f"Ulazna mapa ne postoji:\n{in_dir}")
             return
@@ -440,84 +441,112 @@ class App:
                 "Nema se što obraditi — HEIC/HEIF fotografije treba prvo pretvoriti u JPG.",
             )
             return
-
-        if not self.dry_run_var.get():
-            api_key = self._resolve_api_key()
-            if not api_key:
-                messagebox.showerror(
-                    "Nedostaje API ključ",
-                    "Upišite svoj Anthropic API ključ u polje „API ključ” iznad pa kliknite Spremi.\n\n"
-                    "Ključ možete dobiti na: console.anthropic.com",
-                )
-                return
-            self._api_key = api_key
         self._save_settings()
 
+        # A dry run only lists the photos: no key, no output folder, no lock.
+        if dry:
+            self._launch_dry_run(in_dir)
+            return
+
+        api_key = self._resolve_api_key()
+        if not api_key:
+            messagebox.showerror(
+                "Nedostaje API ključ",
+                "Upišite svoj Anthropic API ključ u polje „API ključ” iznad pa kliknite Spremi.\n\n"
+                "Ključ možete dobiti na: console.anthropic.com",
+            )
+            return
+        self._api_key = api_key
+        self._start_in(in_dir, Path(out_path), self._model_id(), self._effort_id(),
+                       resume=self.resume_var.get())
+
+    def _start_in(self, in_dir: Path, out_dir: Path, model: str, effort: str,
+                  resume: bool, retry: bool = False) -> None:
+        """Lock the output folder, deal with an existing output.csv, then launch the extractor."""
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             messagebox.showerror("Ne mogu stvoriti izlaznu mapu", str(e))
             return
-
-        lock = out_dir / ".tron-grave.lock"
-        if lock.exists():
-            if not messagebox.askyesno(
-                "Mapa je zauzeta",
-                f"{lock} postoji.\n\n"
-                "Možda neka druga obrada već koristi ovu izlaznu mapu. Svejedno nastaviti?",
-            ):
-                return
+        if not self._take_lock(out_dir):
+            return
         try:
-            lock.write_text(str(os.getpid()), encoding="utf-8")
+            if not resume and not self._rotate_existing_output(out_dir):
+                self._release_lock()
+                return
+            self._launch(in_dir, out_dir, model, effort, resume=resume, retry=retry)
+        except BaseException:
+            self._release_lock()
+            raise
+
+    def _rotate_existing_output(self, out_dir: Path) -> bool:
+        """Offer a backup of an existing output.csv before a fresh run; False to abort."""
+        existing = out_dir / "output.csv"
+        if not existing.exists():
+            return True
+        rows = self._csv_row_count(existing)
+        # Timestamped so a second overwrite cannot clobber the first backup.
+        backup = out_dir / f"output.{time.strftime('%Y%m%d-%H%M%S')}.bak.csv"
+        choice = messagebox.askyesnocancel(
+            "output.csv već postoji",
+            f"{existing} već postoji (redaka: {rows}).\n\n"
+            f"Da — spremi kopiju kao {backup.name} i prepiši\n"
+            "Ne — prepiši bez kopije\n"
+            "Odustani — prekini",
+        )
+        if choice is None:
+            return False
+        try:
+            if choice:
+                existing.replace(backup)
+        except OSError as e:
+            messagebox.showerror("Ne mogu spremiti kopiju", str(e))
+            return False
+        return True
+
+    def _take_lock(self, out_dir: Path) -> bool:
+        lock = out_dir / ui_logic.LOCK_NAME
+        if lock.exists() and not messagebox.askyesno(
+            "Mapa je zauzeta",
+            f"{lock} postoji.\n\n"
+            "Možda neka druga obrada već koristi ovu izlaznu mapu. Svejedno nastaviti?",
+        ):
+            return False
+        token = ui_logic.new_lock_token()
+        try:
+            lock.write_text(token, encoding="utf-8")
         except OSError as e:
             messagebox.showerror("Ne mogu zaključati izlaznu mapu", str(e))
-            return
-        self.lockfile_path = lock
+            return False
+        self.lock_path, self.lock_token = lock, token
+        return True
 
-        if not self.dry_run_var.get() and not self.resume_var.get():
-            existing = out_dir / "output.csv"
-            if existing.exists():
-                rows = self._csv_row_count(existing)
-                # Timestamped so a second overwrite cannot clobber the first backup.
-                backup = out_dir / f"output.{time.strftime('%Y%m%d-%H%M%S')}.bak.csv"
-                choice = messagebox.askyesnocancel(
-                    "output.csv već postoji",
-                    f"{existing} već postoji (redaka: {rows}).\n\n"
-                    f"Da — spremi kopiju kao {backup.name} i prepiši\n"
-                    "Ne — prepiši bez kopije\n"
-                    "Odustani — prekini",
-                )
-                if choice is None:
-                    self._release_lock()
-                    return
-                try:
-                    if choice:
-                        existing.replace(backup)
-                except OSError as e:
-                    messagebox.showerror("Ne mogu spremiti kopiju", str(e))
-                    self._release_lock()
-                    return
-
+    def _launch(self, in_dir: Path, out_dir: Path, model: str, effort: str,
+                resume: bool, retry: bool) -> None:
         self._reset_run_state()
         self._set_running(True)
-
         cmd = [
             *_EXTRACTOR_CMD,
             "--input", str(in_dir),
             "--output", str(out_dir),
             "--verbose",
-            "--model", self._model_id(),
-            "--effort", self._effort_id(),
+            "--model", model,
+            "--effort", effort,
         ]
-        if self.dry_run_var.get():
-            cmd.append("--dry-run")
-        if self.resume_var.get():
+        if resume:
             cmd.append("--resume")
-
-        self._is_retry_run = False
-        self._retry_out_dir = None
-        self._launched_dry_run = self.dry_run_var.get()
+        self._is_retry_run = retry
+        self._run_out_dir = out_dir
+        self._launched_dry_run = False
         self._launch_subprocess(cmd)
+
+    def _launch_dry_run(self, in_dir: Path) -> None:
+        self._reset_run_state()
+        self._set_running(True)
+        self._is_retry_run = False
+        self._run_out_dir = None
+        self._launched_dry_run = True
+        self._launch_subprocess([*_EXTRACTOR_CMD, "--input", str(in_dir), "--dry-run"])
 
     def _resolve_api_key(self) -> str:
         key = self.api_key_var.get().strip()
@@ -761,7 +790,7 @@ class App:
             self.progress.configure(mode="determinate", value=self.last_total)
 
         is_retry = self._is_retry_run
-        out_dir = self._retry_out_dir if is_retry else Path(self.output_var.get())
+        out_dir = self._run_out_dir or Path(self.output_var.get())
         is_dry = self._launched_dry_run
         # Windows has no signal exit codes -- a killed child reports 1, so the only reliable
         # signal that a non-zero exit was deliberate is that we asked for it.
@@ -817,7 +846,7 @@ class App:
         self.proc = None
         self.pgid = None
         self._is_retry_run = False
-        self._retry_out_dir = None
+        self._run_out_dir = None
         self._refresh_retry_button()
 
     def _show_summary_popup(self, csv_path: Path, title: str = "Sažetak obrade"):
@@ -921,7 +950,7 @@ class App:
         self._reset_run_state()
         self._set_running(True)
         self._is_retry_run = True
-        self._retry_out_dir = retry_out
+        self._run_out_dir = retry_out
         self._launched_dry_run = False
 
         cmd = [
@@ -955,19 +984,12 @@ class App:
                     os.killpg(self.pgid, signal.SIGKILL)
             except (OSError, ProcessLookupError):
                 pass
-        if self.lockfile_path:
-            try:
-                self.lockfile_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+        self._release_lock()
 
     def _release_lock(self):
-        if self.lockfile_path:
-            try:
-                self.lockfile_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            self.lockfile_path = None
+        if self.lock_path and self.lock_token:
+            ui_logic.release_lock(self.lock_path, self.lock_token)
+        self.lock_path = self.lock_token = None
 
     # ----- run state --------------------------------------------------------
 

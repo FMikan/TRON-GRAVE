@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import uuid
 from pathlib import Path
 
 # Weakest to strongest: "Ponovi byhand/" never steps down this list.
@@ -109,3 +110,21 @@ def write_settings(path: Path, data: dict) -> None:
     except BaseException:
         tmp.unlink(missing_ok=True)   # never leave a half-written copy of the key behind
         raise
+
+
+# ---- output-folder lock --------------------------------------------------------------
+
+LOCK_NAME = ".tron-grave.lock"
+
+
+def new_lock_token() -> str:
+    return f"{os.getpid()}:{uuid.uuid4().hex}"
+
+
+def release_lock(lock: Path, token: str) -> None:
+    """Remove the lock only while it still holds our token: another window may have taken it."""
+    try:
+        if lock.read_text(encoding="utf-8") == token:
+            lock.unlink()
+    except OSError:
+        pass
