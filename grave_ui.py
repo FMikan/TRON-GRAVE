@@ -94,6 +94,11 @@ class App:
         self.root.after(50, self._drain_queue)
         self._refresh_preview()
         self._refresh_output_buttons()
+        # Last of all: the layout pass can map the window, and the folder checks above may wait on
+        # a slow network share. Never narrower than the control row: the Croatian labels are long
+        # and fonts differ per OS and DPI, so a fixed minimum cut off the last button.
+        self.root.update_idletasks()
+        self.root.minsize(max(900, self._ctrl.winfo_reqwidth() + 28), 460)
 
     # ----- UI construction --------------------------------------------------
 
@@ -232,6 +237,7 @@ class App:
         ctrl = ttk.Frame(self.root)
         ctrl.grid(row=2, column=0, sticky="ew", padx=14)
         ctrl.columnconfigure(3, weight=1)
+        self._ctrl = ctrl                       # __init__ sizes the window's minimum from its width
 
         self.btn_start = ttk.Button(
             ctrl, text="▶  Pokreni", command=self._on_start, style="Accent.TButton"
@@ -305,15 +311,15 @@ class App:
         ttk.Button(self.search_frame, text="Zatvori", command=self._hide_search).pack(side="left", padx=(4, 8))
         self._search_entry.bind("<Return>", lambda _e: self._search_next())
 
-        # Caps Lock turns Ctrl+F into keysym F; macOS users press Cmd+F.
-        for sequence in ("<Control-f>", "<Control-F>", "<Command-f>"):
+        # Caps Lock turns Ctrl+F into keysym F; macOS users press Cmd+F. Cmd is bound on Aqua only:
+        # elsewhere Tk reads it as Mod1, which Windows sets while Num Lock is on, and every "f"
+        # typed in the window (the API key field too) would open the search.
+        sequences = ["<Control-f>", "<Control-F>"]
+        if self.root.tk.call("tk", "windowingsystem") == "aqua":
+            sequences.append("<Command-f>")
+        for sequence in sequences:
             self.root.bind(sequence, lambda _e: self._show_search())
         self.root.bind("<Escape>", lambda _e: self._hide_search())
-
-        # Never narrower than the control row: the Croatian labels are long and fonts differ
-        # per OS and DPI, so a fixed minimum cut off the last button.
-        self.root.update_idletasks()
-        self.root.minsize(max(900, ctrl.winfo_reqwidth() + 28), 460)
 
     # ----- model / effort ---------------------------------------------------
 
@@ -924,10 +930,13 @@ class App:
         self.pgid = None
         self._is_retry_run = False
         self._run_out_dir = None
-        self._set_running(False)
         self._release_lock()
-        # The results exist whatever the exit code was; never leave them behind dead buttons.
-        self._refresh_output_buttons()
+        if not self._closing:
+            # A closing window keeps every control off until it is gone: a click in its last
+            # 100 ms (Pokreni, or Ponovi byhand/ once the results are on disk) could launch a run.
+            self._set_running(False)
+            # The results exist whatever the exit code was; never leave them behind dead buttons.
+            self._refresh_output_buttons()
         # Only a finished or a stopped run teaches the estimate: a failed or killed one ends on
         # errors (an api-down run, on three retried unbilled photos) that skew both averages.
         if not is_dry and outcome in ("done", "stopped"):
@@ -1075,20 +1084,26 @@ class App:
     def _on_close(self):
         if self._closing:
             return
-        if self.proc and self.proc.poll() is None:
-            done = self.counters["ok"] + self.counters["partial"] + self.counters["failed"]
-            if not messagebox.askyesno(
-                "Obrada u tijeku",
-                f"Obrada je u tijeku (gotovo: {done}).\nIzaći i zaustaviti obradu?",
-            ):
-                return
-            # Stop on a worker thread and close once the extractor is gone: stopping can take
-            # seconds (up to ~18 s on Windows), and a frozen window looks like a crash.
+        if self.proc:
+            running = self.proc.poll() is None
+            if running:
+                done = self.counters["ok"] + self.counters["partial"] + self.counters["failed"]
+                if not messagebox.askyesno(
+                    "Obrada u tijeku",
+                    f"Obrada je u tijeku (gotovo: {done}).\nIzaći i zaustaviti obradu?",
+                ):
+                    return
+            # Close only once the run's exit is handled (its stats saved), even if the extractor
+            # has already ended and only that is left. A running one is stopped on a worker thread
+            # meanwhile: stopping can take seconds (up to ~18 s on Windows), and a frozen window
+            # looks like a crash.
             self._closing = True
-            self._stop_requested = True
             self.btn_stop.configure(state="disabled")
-            self.status_var.set("Zaustavljam obradu…")
-            threading.Thread(target=self._terminate_run, daemon=True).start()
+            if running:
+                self.status_var.set("Zaustavljam obradu…")
+                if not self._stop_requested:    # Stop may be stopping it already: never a second SIGINT
+                    self._stop_requested = True
+                    threading.Thread(target=self._terminate_run, daemon=True).start()
             self._close_when_stopped(time.monotonic() + 20)
             return
         self._release_lock()

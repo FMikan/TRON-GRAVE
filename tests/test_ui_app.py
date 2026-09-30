@@ -766,11 +766,36 @@ class LayoutTests(AppCase):
     def test_the_window_cannot_shrink_below_the_control_row(self):
         self.root.update_idletasks()        # until the widgets are laid out, every requested width reads 1
         min_width, _ = self.root.minsize()
-        self.assertGreaterEqual(min_width, self.app.btn_retry_byhand.master.winfo_reqwidth())
+        self.assertGreaterEqual(min_width, self.app._ctrl.winfo_reqwidth() + 28)      # and the row's 14 px margins
 
-    def test_search_opens_with_caps_lock_and_on_a_mac(self):
-        for sequence in ("<Control-f>", "<Control-F>", "<Command-f>"):
+    def test_the_window_is_laid_out_after_the_folder_checks_not_before(self):
+        # The layout pass can map the window, and the checks may wait on a slow network folder:
+        # the window must not appear, blank, before they are done.
+        root = tk.Tk()
+        root.withdraw()
+        self.addCleanup(root.destroy)
+        order = []
+        with mock.patch.object(root, "update_idletasks", lambda: order.append("layout")), \
+                mock.patch.object(grave_ui.App, "_refresh_preview", lambda app: order.append("preview")), \
+                mock.patch.object(grave_ui.App, "_refresh_output_buttons", lambda app: order.append("buttons")):
+            grave_ui.App(root)
+        self.assertEqual(order, ["preview", "buttons", "layout"])
+
+    def test_ctrl_f_opens_search_even_with_caps_lock(self):
+        for sequence in ("<Control-f>", "<Control-F>"):
             self.assertTrue(self.root.bind(sequence), sequence)
+
+    def test_cmd_f_opens_search_on_a_mac_only(self):
+        # Off macOS, Tk reads Command as Mod1, which Windows sets while Num Lock is on: with a binding
+        # there, every "f" typed in the window (the API key field too) would open the search.
+        self.assertEqual(bool(self.root.bind("<Command-f>")), self.root.tk.call("tk", "windowingsystem") == "aqua")
+        mac = tk.Tk()
+        mac.withdraw()
+        self.addCleanup(mac.destroy)
+        mac.tk.eval("rename tk ::tk_real; proc tk {args} {if {$args eq {windowingsystem}} {return aqua}; "
+                    "uplevel 1 [list ::tk_real {*}$args]}")         # this Tk now answers as it does on a Mac
+        grave_ui.App(mac)
+        self.assertTrue(mac.bind("<Command-f>"))
 
     def test_cmd_q_on_a_mac_goes_through_the_close_check(self):
         root = tk.Tk()
@@ -783,13 +808,34 @@ class LayoutTests(AppCase):
         on_close.assert_called_once()
 
     def test_the_log_uses_themed_scrollbars(self):
-        bars = [w for w in self.app.log.master.winfo_children() if isinstance(w, ttk.Scrollbar)]
-        self.assertEqual(len(bars), 2)
+        log = self.app.log
+        bars = {str(w.cget("orient")): w for w in log.master.winfo_children() if isinstance(w, ttk.Scrollbar)}
+        self.assertEqual(sorted(bars), ["horizontal", "vertical"])
+        for i in range(300):
+            self.app._append_log(f"line {i} " + "x" * (i % 7 * 40) + "\n")       # more than fits either way
+        self.root.update_idletasks()
+        axes = (("vertical", log.yview, log.yview_moveto, "yscrollcommand"),
+                ("horizontal", log.xview, log.xview_moveto, "xscrollcommand"))
+        for orient, view, move_view_to, scroll_option in axes:
+            with self.subTest(orient):
+                # the log reports its view to this bar ...
+                log.tk.call(str(log.cget(scroll_option)), 0.25, 0.75)
+                self.assertEqual([round(v, 2) for v in bars[orient].get()], [0.25, 0.75])
+                # ... and dragging the bar moves the log along its own axis
+                move_view_to(0)
+                log.tk.call(str(bars[orient].cget("command")), "moveto", "0.5")
+                self.assertGreater(view()[0], 0)
 
     def test_disabled_controls_look_disabled(self):
         style = ttk.Style(self.root)
         for widget_style in ("TCombobox", "TCheckbutton"):
             self.assertEqual(style.lookup(widget_style, "foreground", ["disabled"]), "#5b606b")
+
+    def test_the_combobox_field_and_button_follow_its_state(self):
+        style = ttk.Style(self.root)
+        self.assertEqual(style.lookup("TCombobox", "fieldbackground", ["disabled"]), "#23262d")
+        self.assertEqual(style.lookup("TCombobox", "background", ["disabled"]), "#23262d")
+        self.assertEqual(style.lookup("TCombobox", "background", ["pressed"]), "#343a45")
 
     def test_the_unused_label_styles_are_gone(self):
         source = Path(grave_ui.__file__).read_text(encoding="utf-8")
@@ -892,3 +938,80 @@ class CloseTests(AppCase):
             self.app._on_stop()                       # a click that was already on its way
         thread.assert_called_once()                   # the stopper _on_close started, and no second one
         self.app.proc = None
+
+    def test_closing_while_a_stop_is_under_way_stops_no_second_time(self):
+        self.app._set_running(True)
+        self.app.proc = mock.Mock()
+        self.app.proc.poll.return_value = None
+        with mock.patch.object(grave_ui.threading, "Thread") as thread, \
+                mock.patch.object(self.root, "destroy") as destroy:
+            self.app._on_stop()                       # Stop was pressed and the extractor is still stopping
+            self.app._on_close()
+        thread.assert_called_once()                   # the Stop click's stopper, and no second one
+        self.assertTrue(self.app._closing)
+        destroy.assert_not_called()                   # the window still waits for the exit
+        self.app.proc = None
+
+    def test_a_closing_window_keeps_its_controls_off_when_the_run_ends(self):
+        out = self.tmp / "out"
+        (out / "byhand").mkdir(parents=True)
+        (out / "byhand" / "p_1_x.jpg").write_bytes(jpeg_bytes())      # so the retry button would come back on
+        self.app.output_var.set(str(out))
+        self.app._set_running(True)
+        self.app.proc = mock.Mock()
+        self.app.proc.poll.return_value = None
+        with mock.patch.object(grave_ui.App, "_terminate_run"), \
+                mock.patch.object(self.root, "destroy"):
+            self.app._on_close()
+            self.app._on_proc_exit(130)               # the extractor is gone; the window goes on its next tick
+        for name in ("btn_start", "btn_in", "btn_out", "btn_open_csv", "btn_open_byhand", "btn_retry_byhand",
+                     "model_combo", "effort_combo", "chk_dry"):
+            with self.subTest(control=name):
+                self.assertEqual(str(getattr(self.app, name).cget("state")), "disabled")
+
+    def test_closing_after_the_extractor_ended_asks_nothing_and_waits_for_its_exit_to_be_recorded(self):
+        self.app._reset_run_state()
+        self.app._run_model, self.app._run_effort = "claude-sonnet-5", "high"
+        for line in ("[1/1] Processing a.jpg ...", "[1/1] OK: a.jpg (1 record) — $0.2500 (total: $0.25)",
+                     "Done. 1 images processed. 1 succeeded, 0 partial, 0 failed."):
+            self.app._handle_line("stdout", line + "\n")
+        self.app.proc = mock.Mock()
+        self.app.proc.poll.return_value = 0           # it finished, and its exit is still queued
+        with mock.patch.object(grave_ui.threading, "Thread") as thread, \
+                mock.patch.object(self.root, "destroy") as destroy:
+            self.app._on_close()
+            self.dialogs["askyesno"].assert_not_called()      # nothing left to stop, so nothing to ask
+            thread.assert_not_called()
+            destroy.assert_not_called()               # _on_proc_exit has not recorded the run yet
+            self.app._on_proc_exit(0)
+            self.app._close_when_stopped(float("inf"))
+        destroy.assert_called_once()
+        self.assertFalse(self.app._stop_requested)    # it ended on its own: a failure must not pass as a stop
+        stats = json.loads(self.settings_path.read_text(encoding="utf-8"))["stats"]
+        self.assertEqual(stats["claude-sonnet-5|high"]["n"], 1)
+        for name, dialog in self.dialogs.items():
+            with self.subTest(dialog=name):
+                dialog.assert_not_called()
+        for shown in (self.app._draw_attention, self.app._notify_done, self.app._show_summary_popup):
+            shown.assert_not_called()
+
+    def test_declining_the_close_question_leaves_the_run_alone(self):
+        self.app._set_running(True)
+        self.app.proc = mock.Mock()
+        self.app.proc.poll.return_value = None
+        self.dialogs["askyesno"].return_value = False
+        with mock.patch.object(grave_ui.threading, "Thread") as thread, \
+                mock.patch.object(self.root, "destroy") as destroy:
+            self.app._on_close()
+        self.assertFalse(self.app._closing)
+        self.assertFalse(self.app._stop_requested)
+        self.assertEqual(str(self.app.btn_stop.cget("state")), "normal")
+        thread.assert_not_called()
+        destroy.assert_not_called()
+        self.app.proc = None
+
+    def test_closing_with_no_run_closes_at_once_without_asking(self):
+        with mock.patch.object(self.root, "destroy") as destroy:
+            self.app._on_close()
+        destroy.assert_called_once()
+        self.dialogs["askyesno"].assert_not_called()
