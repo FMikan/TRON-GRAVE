@@ -205,7 +205,7 @@ RESUME_BLOCKERS = {
     "old-format": "output.csv ima drugačije stupce — izradila ga je starija verzija programa "
                   "ili je ponovno spremljen iz Excela",
     "no-processed": "nedostaje popis obrađenih slika (.processed), pa bi se sve slike ponovno poslale",
-    "missing-csv": "output.csv nedostaje",
+    "missing-csv": "output.csv je prazan ili nedostaje",
     "unreadable": "output.csv se ne može pročitati",
 }
 

@@ -197,6 +197,38 @@ class ProgressTests(AppCase):
         self.app._on_proc_exit(-9)
         self.assertIn("Nastavi", self.dialogs["showerror"].call_args[0][1])
 
+    def test_a_stopped_dry_run_claims_no_save(self):
+        self.app._reset_run_state()
+        self.app._launched_dry_run = True
+        self.app._stop_requested = True
+        self.app._on_proc_exit(130)
+        self.dialogs["showinfo"].assert_not_called()
+        self.assertEqual(self.app.status_var.get(), "Probni prolaz zaustavljen.")
+
+    def test_a_dry_run_that_ends_badly_has_no_resume_hint(self):
+        for rc in (1, -9):          # failed, and killed without a Stop click
+            with self.subTest(rc=rc):
+                self.app._reset_run_state()
+                self.app._launched_dry_run = True
+                self.app._on_proc_exit(rc)
+                body = self.dialogs["showerror"].call_args[0][1]
+                self.assertNotIn("Nastavi", body)
+                self.assertEqual(body, body.rstrip())        # no dangling blank line
+
+    def test_the_resume_hint_is_left_out_where_nastavi_cannot_help(self):
+        for line, hint in (
+                ("error: [resume-refused] output.csv has different columns, so this run can't be resumed.", False),
+                ("error: [input-is-byhand] The input folder is this output folder's byhand/ folder.", False),
+                ("error: [api-402] API call failed: Error code: 402", True)):
+            with self.subTest(line=line):
+                self.app._reset_run_state()
+                self.app._handle_line("stderr", line + "\n")
+                self.app._on_proc_exit(1)
+                body = self.dialogs["showerror"].call_args[0][1]
+                self.assertEqual("Nastavi" in body, hint)
+                if not hint:
+                    self.assertEqual(body, body.rstrip())    # no dangling blank line
+
     def test_every_verdict_is_counted_and_review_photos_are_remembered_until_the_next_run(self):
         self.app._reset_run_state()
         self.feed("[1/4] Processing a.jpg ...", "[1/4] OK: a.jpg (1 record) — $0.0100 (total: $0.01)",
@@ -272,6 +304,22 @@ class ExistingOutputTests(RunCase):
         self.assertFalse(self.lock().exists())
         self.assertTrue((self.out / "output.csv").exists())
 
+    def test_a_byhand_that_will_not_move_puts_the_csv_back(self):
+        # Windows: a photo in byhand/ open in a viewer. output.csv was already moved aside by then.
+        self.make_output()
+        (self.out / "byhand").mkdir()
+        (self.out / "byhand" / "p_1_x.jpg").write_bytes(b"x")
+        with mock.patch.object(grave_ui.App, "_ask_existing_output", return_value="fresh"), \
+                mock.patch.object(Path, "rename", side_effect=PermissionError("locked")):
+            self.app._on_start()
+        title, body = self.dialogs["showerror"].call_args[0]
+        self.assertEqual(title, "Ne mogu spremiti kopiju")
+        self.assertIn("output.csv i slike iz byhand/", body)     # the hint names both causes
+        self.assertTrue((self.out / "output.csv").exists())
+        self.assertEqual(list(self.out.glob("output.*.bak.csv")), [])
+        self.assertEqual(self.launched, [])
+        self.assertFalse(self.lock().exists())
+
     def test_an_excel_saved_csv_blocks_nastavi_with_a_reason_and_frees_the_lock(self):
         self.out.mkdir(parents=True)
         (self.out / "output.csv").write_bytes("ID;Name\r\n1;Mišo\r\n".encode("cp1250"))
@@ -287,12 +335,62 @@ class ExistingOutputTests(RunCase):
         win.btn_fresh.invoke()
         self.assertEqual(choice["value"], "fresh")
 
+    def open_dialog(self):
+        """The Nastavi / Prepiši / Odustani dialog with nothing blocking it, never mapped."""
+        win, choice = self.app._build_existing_output_dialog(Path("x/output.csv"), 3, 1, 2, None)
+        win.withdraw()
+        self.addCleanup(lambda: win.winfo_exists() and win.destroy())
+        return win, choice
+
+    def test_the_dialog_offers_nastavi_when_nothing_blocks_it(self):
+        win, choice = self.open_dialog()
+        self.assertEqual(str(win.btn_resume.cget("state")), "normal")
+        win.btn_resume.invoke()
+        self.assertEqual(choice["value"], "resume")
+        self.assertFalse(win.winfo_exists())
+
+    # Escape is bound to the same pick(None), but Tk delivers no key event to a window that is
+    # never mapped, so it is left untested rather than flashing the dialog on screen.
+    def test_odustani_and_closing_the_window_both_answer_none(self):
+        for how, close in (("Odustani", lambda win: win.btn_cancel.invoke()),
+                           ("window close", lambda win: win.tk.call(win.protocol("WM_DELETE_WINDOW")))):
+            with self.subTest(how):
+                win, choice = self.open_dialog()
+                choice["value"] = "resume"        # preset, so the None can only come from the close
+                close(win)
+                self.assertIsNone(choice["value"])
+                self.assertFalse(win.winfo_exists())
+
     def test_a_missing_csv_with_a_processed_list_warns_first(self):
         self.out.mkdir(parents=True)
         (self.out / ".processed").write_text("p_1_x.jpg\n", encoding="utf-8")
         self.dialogs["askyesno"].return_value = False
         self.app._on_start()
+        title, body = self.dialogs["askyesno"].call_args[0]
+        self.assertEqual(title, "Nedostaje output.csv")
+        self.assertIn("Svejedno krenuti ispočetka?", body)       # says what Da does
+        self.assertNotIn("Nastaviti?", body)
         self.assertEqual(self.launched, [])
+        self.assertFalse(self.lock().exists())
+
+    def test_starting_over_after_a_missing_csv_is_a_fresh_run_that_sets_byhand_aside(self):
+        self.out.mkdir(parents=True)
+        (self.out / ".processed").write_text("p_1_x.jpg\n", encoding="utf-8")
+        (self.out / "byhand").mkdir()
+        (self.out / "byhand" / "p_1_x.jpg").write_bytes(b"x")
+        self.app._on_start()                                   # the harness answers Da
+        self.assertEqual(self.dialogs["askyesno"].call_args[0][0], "Nedostaje output.csv")
+        self.assertNotIn("--resume", self.launched[-1])
+        self.assertEqual(len(list(self.out.glob("byhand.*.bak"))), 1)
+        self.assertFalse((self.out / "byhand").exists())
+
+    def test_an_empty_output_csv_is_called_empty_not_missing(self):
+        self.out.mkdir(parents=True)
+        (self.out / "output.csv").write_bytes(b"")
+        (self.out / ".processed").write_text("p_1_x.jpg\n", encoding="utf-8")
+        with mock.patch.object(grave_ui.App, "_ask_existing_output", return_value=None) as ask:
+            self.app._on_start()
+        self.assertIn("prazan", ask.call_args[0][4])
 
     @unittest.skipIf(os.name == "nt" or os.geteuid() == 0, "needs POSIX permissions as a normal user")
     def test_a_locked_csv_is_caught_before_launch(self):
@@ -302,6 +400,17 @@ class ExistingOutputTests(RunCase):
             self.app._on_start()
         self.assertEqual(self.dialogs["showerror"].call_args[0][0], "Datoteka je zaključana")
         self.assertEqual(self.launched, [])
+        self.assertFalse(self.lock().exists())
+
+    def test_the_lock_check_is_the_extractors_own(self):
+        self.make_output()
+        with mock.patch.object(grave_ui.App, "_ask_existing_output", return_value="resume"), \
+                mock.patch.object(grave_ui, "check_writable", side_effect=PermissionError("locked")) as check:
+            self.app._on_start()
+        check.assert_called_once_with(self.out / "output.csv")
+        self.assertEqual(self.dialogs["showerror"].call_args[0][0], "Datoteka je zaključana")
+        self.assertEqual(self.launched, [])
+        self.assertFalse(self.lock().exists())
 
     def test_the_outputs_byhand_folder_is_refused_as_input(self):
         byhand = self.out / "byhand"

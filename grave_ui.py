@@ -19,7 +19,7 @@ from tkinter.scrolledtext import ScrolledText
 from dotenv import dotenv_values
 
 import ui_logic
-from extractor.csv_writer import read_processed, resume_problem
+from extractor.csv_writer import check_writable, read_processed, resume_problem
 from extractor.file_utils import is_heic, is_supported_image
 from _version import __version__
 
@@ -483,7 +483,8 @@ class App:
             if processed and not messagebox.askyesno(
                 "Nedostaje output.csv",
                 f"output.csv nedostaje, ali .processed bilježi obrađene slike (ukupno: {len(processed)}).\n\n"
-                "Novi početak ponovno će ih poslati API-ju (i platiti). Nastaviti?",
+                "Ako krenete ispočetka, te će se slike ponovno poslati API-ju i ponovno platiti.\n\n"
+                "Svejedno krenuti ispočetka?",
             ):
                 return None
             return "fresh"
@@ -549,18 +550,29 @@ class App:
         return win, choice
 
     def _backup_outputs(self, out_dir: Path) -> bool:
-        """Move output.csv and byhand/ aside, with one timestamp, before a fresh run."""
+        """Move output.csv and byhand/ aside, with one timestamp, before a fresh run: both or neither."""
         stamp = time.strftime("%Y%m%d-%H%M%S")
+        csv_path = out_dir / "output.csv"
+        csv_backup = out_dir / f"output.{stamp}.bak.csv"
+        csv_moved = False
         try:
-            csv_path = out_dir / "output.csv"
             if csv_path.exists():
-                csv_path.replace(out_dir / f"output.{stamp}.bak.csv")
+                csv_path.replace(csv_backup)
+                csv_moved = True
             byhand = out_dir / "byhand"
             if byhand.is_dir():
                 byhand.rename(out_dir / f"byhand.{stamp}.bak")
         except OSError as e:
-            messagebox.showerror("Ne mogu spremiti kopiju",
-                                 f"{e}\n\nAko je output.csv otvoren (npr. u Excelu), zatvorite ga.")
+            if csv_moved:       # byhand/ would not move (a photo open in a viewer): undo the first half
+                try:
+                    csv_backup.replace(csv_path)
+                except OSError:
+                    pass
+            messagebox.showerror(
+                "Ne mogu spremiti kopiju",
+                f"{e}\n\nZatvorite output.csv i slike iz byhand/ ako su negdje otvoreni "
+                "(npr. u Excelu ili pregledniku slika) pa pokušajte ponovno.",
+            )
             return False
         return True
 
@@ -570,8 +582,7 @@ class App:
         if not csv_path.exists():
             return True
         try:
-            with open(csv_path, "a", encoding="utf-8"):
-                pass
+            check_writable(csv_path)
         except OSError:
             messagebox.showerror("Datoteka je zaključana",
                                  f"Ne mogu pisati u {csv_path}.\n\nZatvorite je (npr. u Excelu) pa pokušajte ponovno.")
@@ -912,12 +923,19 @@ class App:
 
         again = "Ponovi byhand/" if is_retry else "Pokreni"
         where = "byhand_retry/output.csv" if is_retry else "output.csv"
-        resume_hint = (f"Za nastavak kliknite {again} i odaberite Nastavi — već obrađene slike "
-                       "neće se ponovno slati (ni plaćati).")
-        if outcome == "stopped":
+        fatal = ui_logic.FATAL_TAG_RE.match(self._last_stderr)
+        tag = fatal.group(1) if fatal else None
+        # A dry run saved nothing to resume, and Nastavi cannot cure these two errors.
+        resumable = not is_dry and tag not in ("resume-refused", "input-is-byhand")
+        # Carries its own blank line, so a dialog without it does not end on one.
+        resume_hint = (f"\n\nZa nastavak kliknite {again} i odaberite Nastavi — već obrađene slike "
+                       "neće se ponovno slati (ni plaćati).") if resumable else ""
+        if outcome == "stopped" and is_dry:
+            self.status_var.set("Probni prolaz zaustavljen.")
+        elif outcome == "stopped":
             self.status_var.set(f"Zaustavljeno — obrađeno slika: {saved}.")
             messagebox.showinfo("Zaustavljeno",
-                                f"Zaustavljeno. Obrađeno slika: {saved}; spremljeno u {where}.\n\n{resume_hint}")
+                                f"Zaustavljeno. Obrađeno slika: {saved}; spremljeno u {where}.{resume_hint}")
         elif outcome == "done":
             self._append_log(f"\n[izlazni kod {rc}]\n", "info")
             if is_dry:
@@ -937,7 +955,7 @@ class App:
             messagebox.showerror(
                 "Obrada prekinuta",
                 f"Obrada je neočekivano prekinuta (izlazni kod {rc}).\n\n"
-                f"{self._last_error_line()}\n\n{resume_hint}",
+                f"{self._last_error_line()}{resume_hint}",
             )
         else:
             self._append_log(f"\n[neuspjelo, izlazni kod {rc}]\n", "stderr")
@@ -945,7 +963,7 @@ class App:
             lead = (ui_logic.explain_failure(self._last_stderr)
                     or f"Obrada je završila s izlaznim kodom {rc}.")
             messagebox.showerror("Obrada nije uspjela",
-                                 f"{lead}\n\n{self._last_error_line()}\n\n{resume_hint}")
+                                 f"{lead}\n\n{self._last_error_line()}{resume_hint}")
 
     def _show_summary_popup(self, csv_path: Path, title: str = "Sažetak obrade"):
         ok = self.counters["ok"]
