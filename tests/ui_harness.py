@@ -28,6 +28,7 @@ class AppCase(unittest.TestCase):
         self.dialogs = {name: self._patch(grave_ui.messagebox, name, mock.Mock(return_value=True))
                         for name in ("showinfo", "showwarning", "showerror", "askyesno", "askyesnocancel")}
         self._patch(grave_ui.App, "_notify_done", mock.Mock())
+        self._patch(grave_ui.App, "_draw_attention", mock.Mock())
         self._patch(grave_ui.App, "_show_summary_popup", mock.Mock())
         self._patch(grave_ui.App, "_ask_existing_output", mock.Mock(side_effect=AssertionError(
             "unexpected Nastavi/Prepiši/Odustani dialog: patch _ask_existing_output in this test")))

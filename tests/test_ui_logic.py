@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 import ui_logic
+from extractor.csv_writer import append_rows, init_csv
 from extractor.pricing import MODEL_PRICING
 
 REPO = Path(__file__).resolve().parents[1]
@@ -253,3 +254,29 @@ class RetrySettingsTests(unittest.TestCase):
         self.assertEqual(retry("claude-fable-5-1", "max"), ("claude-fable-5-1", "max"))
         self.assertEqual(retry("claude-opus-5", "xhigh"), ("claude-opus-5-5", "xhigh"))
         self.assertEqual(retry("unknown", "weird"), ("claude-opus-5-5", "high"))
+
+
+class TallyTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_only_this_runs_flagged_photos_count(self):
+        path = self.tmp / "output.csv"
+        init_csv(path)
+        append_rows(path, [["1", "A", "B", "", "", "bez god. smrti", "a.jpg"],
+                           ["2", "", "B", "", "", "fali: ime; god. smrti nečitka", "b.jpg"],
+                           ["3", "", "C", "", "", "fali: ime", "c.jpg"],
+                           ["4", "", "D", "", "", "fali: ime", "old.jpg"]])
+        self.assertEqual(ui_logic.tally_review_notes(path, {"b.jpg", "c.jpg"}),
+                         [("fali: ime", 2), ("god. smrti nečitka", 1)])
+
+    def test_a_csv_saved_in_the_windows_code_page_still_tallies(self):
+        # The Name holds 0x9A (cp1250 "š"), which is not UTF-8: it is replaced, never raised on.
+        path = self.tmp / "output.csv"
+        path.write_bytes("ID,Name,Surname,Year of Birth,Year of Death,Notes,File\r\n"
+                         "1,Mišo,B,,,fali: ime,a.jpg\r\n".encode("cp1250"))
+        self.assertEqual(ui_logic.tally_review_notes(path, {"a.jpg"}), [("fali: ime", 1)])
+
+    def test_a_missing_csv_has_no_reasons(self):
+        self.assertEqual(ui_logic.tally_review_notes(self.tmp / "output.csv", {"a.jpg"}), [])

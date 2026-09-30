@@ -1,14 +1,16 @@
 import json
 import os
+import tkinter as tk
 import unittest
 from pathlib import Path
+from tkinter import ttk
 from unittest import mock
 
 import grave_ui
 import ui_logic
 from extractor.csv_writer import append_rows, init_csv, init_processed, mark_processed
 from tests.helpers import jpeg_bytes
-from tests.ui_harness import AppCase
+from tests.ui_harness import REAL_SHOW_SUMMARY, AppCase
 
 
 class LabelTests(AppCase):
@@ -596,3 +598,100 @@ class RetryTests(RunCase):
         self.app._stop_requested = True
         self.app._on_proc_exit(130)
         self.assertIn("Ponovi byhand/", self.dialogs["showinfo"].call_args[0][1])
+
+
+class OutputButtonTests(AppCase):
+    def results_on_disk(self) -> Path:
+        out = self.tmp / "out"
+        (out / "byhand").mkdir(parents=True)
+        init_csv(out / "output.csv")
+        return out
+
+    def open_states(self, app=None) -> tuple[str, str]:
+        app = app or self.app
+        return str(app.btn_open_csv.cget("state")), str(app.btn_open_byhand.cget("state"))
+
+    def test_the_open_buttons_follow_what_is_on_disk(self):
+        self.app.output_var.set(str(self.results_on_disk()))
+        self.app._refresh_output_buttons()
+        self.app._on_model_change()                 # this used to disable them
+        self.assertEqual(self.open_states(), ("normal", "normal"))
+
+    def test_the_open_buttons_survive_an_effort_change(self):
+        self.app.output_var.set(str(self.results_on_disk()))
+        self.app._refresh_output_buttons()
+        self.app._on_effort_change()                # so did this, once the estimate learned from runs
+        self.assertEqual(self.open_states(), ("normal", "normal"))
+
+    def test_the_open_buttons_are_right_from_the_first_moment(self):
+        self.settings_path.parent.mkdir(parents=True)
+        self.settings_path.write_text(json.dumps({"output": str(self.results_on_disk())}), encoding="utf-8")
+        root = tk.Tk()
+        root.withdraw()
+        self.addCleanup(root.destroy)
+        self.assertEqual(self.open_states(grave_ui.App(root)), ("normal", "normal"))
+
+    def test_picking_an_output_folder_sets_the_open_buttons_from_it(self):
+        empty = self.tmp / "empty"
+        empty.mkdir()
+        pick = self._patch(grave_ui.filedialog, "askdirectory",
+                           mock.Mock(return_value=str(self.results_on_disk())))
+        self.app._pick_output()
+        self.assertEqual(self.open_states(), ("normal", "normal"))
+        pick.return_value = str(empty)
+        self.app._pick_output()
+        self.assertEqual(self.open_states(), ("disabled", "disabled"))
+
+    def test_an_output_folder_that_cannot_be_checked_reads_as_empty(self):
+        # Path.is_file()/is_dir() raise PermissionError on Python <= 3.12 for a path under an
+        # unreadable parent, and the buttons refresh from __init__: that must not keep the
+        # window from opening.
+        self.app.output_var.set(str(self.tmp / "locked" / "out"))
+        with mock.patch.object(Path, "is_file", side_effect=PermissionError(13, "denied")), \
+                mock.patch.object(Path, "is_dir", side_effect=PermissionError(13, "denied")):
+            self.app._refresh_output_buttons()
+        self.assertEqual(self.open_states(), ("disabled", "disabled"))
+
+    def test_a_finished_run_draws_attention(self):
+        self.app._reset_run_state()
+        self.app._on_proc_exit(0)
+        self.app._draw_attention.assert_called_once()
+
+    def test_every_other_way_a_real_run_ends_draws_attention_but_a_dry_run_does_not(self):
+        for rc, stopped, dry in ((1, False, False), (-9, False, False), (130, True, False), (0, False, True)):
+            with self.subTest(rc=rc, stopped=stopped, dry=dry):
+                self.app._draw_attention.reset_mock()
+                self.app._reset_run_state()
+                self.app._launched_dry_run = dry
+                self.app._stop_requested = stopped
+                self.app._on_proc_exit(rc)
+                self.assertEqual(self.app._draw_attention.call_count, 0 if dry else 1)
+
+
+class SummaryTests(AppCase):
+    def test_the_summary_lists_this_runs_reasons_and_opens_its_csv(self):
+        csv_path = self.tmp / "output.csv"
+        init_csv(csv_path)
+        append_rows(csv_path, [["1", "A", "B", "", "", "bez god. smrti", "a.jpg"],
+                               ["2", "", "B", "", "", "fali: ime; god. smrti nečitka", "b.jpg"],
+                               ["3", "", "C", "", "", "fali: ime", "old.jpg"]])
+        self.app._flagged = {"b.jpg"}
+        win = REAL_SHOW_SUMMARY(self.app, csv_path, "Sažetak obrade")
+        win.withdraw()                              # never mapped: a test must not flash a window
+        self.addCleanup(win.destroy)
+        widgets, stack = [], [win]
+        while stack:
+            widget = stack.pop()
+            widgets.append(widget)
+            stack.extend(widget.winfo_children())
+        texts = [str(w.cget("text")) for w in widgets if isinstance(w, (ttk.Label, ttk.Button))]
+        self.assertIn("  1×  fali: ime", texts)
+        self.assertIn("  1×  god. smrti nečitka", texts)
+        self.assertNotIn("  1×  bez god. smrti", texts)
+        # _flagged is every non-OK photo, including API failures that never reach byhand/
+        self.assertEqual([text for text in texts if "byhand" in text], [])
+        with mock.patch.object(grave_ui.App, "_open_path") as open_path:
+            next(w for w in widgets if isinstance(w, ttk.Button) and w.cget("text") == "Otvori CSV").invoke()
+        open_path.assert_called_once_with(csv_path)
+        self.assertTrue(win.bind("<Escape>"))
+        self.assertTrue(win.bind("<Return>"))

@@ -9,7 +9,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from extractor.csv_writer import read_csv
+from extractor.csv_writer import FILE_INDEX, NOTES_INDEX, read_csv
 from extractor.pricing import DEFAULT_PRICING, MODEL_PRICING
 
 # Weakest to strongest: "Ponovi byhand/" never steps down this list.
@@ -285,3 +285,22 @@ def retry_settings(model: str, effort: str) -> tuple[str, str]:
     stronger_effort = (effort in EFFORT_LEVELS
                        and EFFORT_LEVELS.index(effort) > EFFORT_LEVELS.index(RETRY_EFFORT))
     return retry_model, effort if stronger_effort else RETRY_EFFORT
+
+
+# ---- summary ---------------------------------------------------------------------------
+
+def tally_review_notes(csv_path: Path, flagged_files: set[str], limit: int = 5) -> list[tuple[str, int]]:
+    """The most common Notes fragments among this run's PARTIAL/FAILED photos."""
+    try:
+        _header, rows = read_csv(csv_path)
+    except (OSError, ValueError, csv.Error):
+        return []
+    counts: dict[str, int] = {}
+    for row in rows:
+        if len(row) <= FILE_INDEX or row[FILE_INDEX] not in flagged_files:
+            continue
+        for part in row[NOTES_INDEX].split("; "):
+            part = part.strip()
+            if part:
+                counts[part] = counts.get(part, 0) + 1
+    return sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:limit]

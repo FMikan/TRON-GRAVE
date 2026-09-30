@@ -2,7 +2,6 @@
 """TRON-GRAVE desktop UI — wraps grave_extractor.py with a Tkinter front-end."""
 
 import atexit
-import csv
 import os
 import queue
 import signal
@@ -92,6 +91,7 @@ class App:
         atexit.register(self._atexit_kill)
         self.root.after(50, self._drain_queue)
         self._refresh_preview()
+        self._refresh_output_buttons()
 
     # ----- UI construction --------------------------------------------------
 
@@ -351,11 +351,9 @@ class App:
             self.output_var.set(d)
             self._save_settings()
             self._refresh_preview()
+            self._refresh_output_buttons()
 
     def _refresh_preview(self):
-        self.btn_open_csv.configure(state="disabled")
-        self.btn_open_byhand.configure(state="disabled")
-        self._refresh_retry_button()
         in_path = self.input_var.get()
         if not in_path:
             self.preview_var.set("")
@@ -399,6 +397,20 @@ class App:
             # from __init__, so an uncaught OSError here means the window never opens.
             has_images = False
         self.btn_retry_byhand.configure(state="normal" if has_images else "disabled")
+
+    def _refresh_output_buttons(self):
+        """Enable Open and Retry from what is on disk, never from what the last click did."""
+        if self.proc is not None:
+            return                      # a run is in progress; _set_running disabled them
+        out = self.output_var.get()
+        base = Path(out) if out else None
+        # os.path.isfile/isdir never raise; Path.is_file/is_dir re-raise PermissionError on
+        # Python <= 3.12 for a folder under one it cannot enter, and this runs from __init__.
+        self.btn_open_csv.configure(
+            state="normal" if base and os.path.isfile(base / "output.csv") else "disabled")
+        self.btn_open_byhand.configure(
+            state="normal" if base and os.path.isdir(base / "byhand") else "disabled")
+        self._refresh_retry_button()
 
     # ----- start / stop / lifecycle -----------------------------------------
 
@@ -903,18 +915,14 @@ class App:
         self._run_out_dir = None
         self._set_running(False)
         self._release_lock()
-        # Only a finished or a stopped run teaches the estimate: a failed or killed one ends on
-        # errors (an api-down run, on three retried unbilled photos) that skew both averages.
-        if not is_dry and outcome in ("done", "stopped"):
-            self._record_stats()
-
         # The results exist whatever the exit code was; never leave them behind dead buttons.
-        main_dir = Path(self.output_var.get()) if self.output_var.get() else None
-        if main_dir and (main_dir / "output.csv").exists():
-            self.btn_open_csv.configure(state="normal")
-        if main_dir and (main_dir / "byhand").is_dir():
-            self.btn_open_byhand.configure(state="normal")
-        self._refresh_retry_button()
+        self._refresh_output_buttons()
+        if not is_dry:
+            # Only a finished or a stopped run teaches the estimate: a failed or killed one ends on
+            # errors (an api-down run, on three retried unbilled photos) that skew both averages.
+            if outcome in ("done", "stopped"):
+                self._record_stats()
+            self._draw_attention()
 
         ok = self.counters["ok"]
         partial = self.counters["partial"]
@@ -970,7 +978,7 @@ class App:
         partial = self.counters["partial"]
         failed = self.counters["failed"]
         total = ok + partial + failed
-        reasons = self._tally_notes(csv_path)
+        reasons = ui_logic.tally_review_notes(csv_path, self._flagged)
 
         win = tk.Toplevel(self.root)
         win.title(title)
@@ -980,53 +988,38 @@ class App:
 
         frm = ttk.Frame(win, padding=16)
         frm.grid(row=0, column=0, sticky="nsew")
-
         ttk.Label(frm, text=title, font=("Segoe UI Semibold", 13)).grid(
-            row=0, column=0, sticky="w", pady=(0, 10)
-        )
-        ttk.Label(
-            frm,
-            text=f"Ukupno: {total}   ·   OK: {ok}   ·   Za pregled: {partial}   ·   Neuspjelo: {failed}",
-        ).grid(row=1, column=0, sticky="w")
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        ttk.Label(frm, text=f"Ukupno: {total}   ·   OK: {ok}   ·   Za pregled: {partial}   ·   "
+                            f"Neuspjelo: {failed}").grid(row=1, column=0, columnspan=2, sticky="w")
         ttk.Label(frm, text=f"Ukupni trošak: ${self.total_cost:.2f}").grid(
-            row=2, column=0, sticky="w", pady=(2, 10)
-        )
+            row=2, column=0, columnspan=2, sticky="w", pady=(2, 10))
 
         row = 3
         if reasons:
-            ttk.Label(
-                frm, text="Najčešći razlozi za pregled:", font=("Segoe UI Semibold", 10)
-            ).grid(row=row, column=0, sticky="w")
+            ttk.Label(frm, text="Najčešći razlozi za pregled:", font=("Segoe UI Semibold", 10)).grid(
+                row=row, column=0, columnspan=2, sticky="w")
             row += 1
             for reason, count in reasons:
                 ttk.Label(frm, text=f"  {count}×  {reason}", foreground="#9aa0a6").grid(
-                    row=row, column=0, sticky="w"
-                )
+                    row=row, column=0, columnspan=2, sticky="w")
                 row += 1
 
-        ttk.Button(frm, text="Zatvori", command=win.destroy).grid(
-            row=row, column=0, sticky="e", pady=(14, 0)
-        )
-        win.grab_set()
+        ttk.Button(frm, text="Otvori CSV", command=lambda: self._open_path(csv_path)).grid(
+            row=row, column=0, sticky="w", pady=(14, 0))
+        close_btn = ttk.Button(frm, text="Zatvori", command=win.destroy)
+        close_btn.grid(row=row, column=1, sticky="e", pady=(14, 0))
+        win.bind("<Escape>", lambda _e: win.destroy())
+        win.bind("<Return>", lambda _e: win.destroy())
+        close_btn.focus_set()
 
-    @staticmethod
-    def _tally_notes(csv_path: Path, limit: int = 5) -> list[tuple[str, int]]:
-        """Top N distinct note fragments from the Notes column, for the summary popup."""
-        counts: dict[str, int] = {}
-        try:
-            with csv_path.open(encoding="utf-8-sig", newline="") as f:
-                reader = csv.reader(f)
-                next(reader, None)  # header
-                for row in reader:
-                    if len(row) < 6 or not row[5]:
-                        continue
-                    for part in row[5].split("; "):
-                        part = part.strip()
-                        if part:
-                            counts[part] = counts.get(part, 0) + 1
-        except OSError:
-            return []
-        return sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:limit]
+        def grab():
+            try:
+                win.grab_set()
+            except tk.TclError:
+                pass   # not mapped yet, or already closed: the popup works without a grab
+        win.after(100, grab)
+        return win
 
     def _on_retry_byhand(self):
         out_dir = Path(self.output_var.get())
@@ -1168,6 +1161,15 @@ class App:
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
         except OSError:
+            pass
+
+    def _draw_attention(self):
+        """Bring the window back when a run ends, even if it was minimized."""
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.bell()
+        except tk.TclError:
             pass
 
     # ----- search bar -------------------------------------------------------
