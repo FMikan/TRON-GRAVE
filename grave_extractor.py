@@ -96,12 +96,16 @@ def resume_filter(output_dir: Path) -> set[str]:
     return read_processed(output_dir)
 
 
-def drop_unprocessed_rows(output_csv: Path, processed: set[str]) -> None:
-    """Remove the rows of photos about to be re-run, so none appears twice."""
-    _header, rows = read_csv(output_csv)
-    done = {csv_text(name) for name in processed}
-    keep = [row for row in rows if len(row) > FILE_INDEX and row[FILE_INDEX] in done]
-    if len(keep) != len(rows):
+def drop_rows_being_rerun(output_csv: Path, images: list[Path]) -> None:
+    """Remove the rows of the photos about to be re-run, so none appears twice.
+
+    Every other row stays (other photos, rows typed in by hand), and a missing header
+    (an emptied output.csv) is put back.
+    """
+    header, rows = read_csv(output_csv)
+    rerun = {csv_text(img.name) for img in images}
+    keep = [row for row in rows if not (len(row) > FILE_INDEX and row[FILE_INDEX] in rerun)]
+    if not header or len(keep) != len(rows):
         rewrite_rows(output_csv, keep)
 
 
@@ -124,7 +128,6 @@ def main() -> int:
 
     images = discover_images(input_dir)
 
-    processed: set[str] = set()
     if args.resume:
         processed = resume_filter(output_dir)
         before = len(images)
@@ -151,7 +154,7 @@ def main() -> int:
 
     try:
         if args.resume and output_csv.exists():
-            drop_unprocessed_rows(output_csv, processed)
+            drop_rows_being_rerun(output_csv, images)
         else:
             init_csv(output_csv)
             init_processed(output_dir)

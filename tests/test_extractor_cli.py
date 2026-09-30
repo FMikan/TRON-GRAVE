@@ -169,6 +169,46 @@ class ResumeTests(CliCase):
         self.assertEqual(len(client.calls), 1)
         self.assertEqual([r[1] for r in self.rows() if r[6] == "p_2_x.jpg"], ["Ana"])
 
+    def test_a_failure_row_of_a_photo_missing_from_the_resumed_input_survives(self):
+        self.add_image("p_1_x.jpg")
+        gone = self.add_image("p_2_x.jpg")
+        self.run_cli(message(answer(record())), api_error(400))
+        gone.unlink()                        # the resumed input is another folder: p_2 is not re-run
+        self.add_image("p_3_x.jpg")
+        code, _, _, client = self.run_cli(message(answer(record(name="Ana"))), args=("--resume",))
+        self.assertEqual((code, len(client.calls)), (0, 1))
+        self.assertEqual(sorted((r[6], r[1], r[5]) for r in self.rows()),
+                         [("p_1_x.jpg", "Ivan", ""), ("p_2_x.jpg", "", "greška API-ja"), ("p_3_x.jpg", "Ana", "")])
+
+    def test_a_row_with_a_blank_file_cell_survives_resume(self):
+        self.add_image("p_1_x.jpg")
+        self.add_image("p_2_x.jpg")
+        self.run_cli(message(answer(record())), api_error(400))
+        typed_in_excel = ["99", "Hand", "Added", "", "", "typed in Excel", ""]
+        append_rows(self.out / "output.csv", [typed_in_excel])
+        code, _, _, client = self.run_cli(message(answer(record(name="Ana"))), args=("--resume",))
+        self.assertEqual((code, len(client.calls), len(self.rows())), (0, 1, 3))
+        self.assertIn(typed_in_excel, self.rows())
+
+    def test_a_row_cut_short_survives_resume(self):
+        self.add_image("p_1_x.jpg")
+        self.add_image("p_2_x.jpg")
+        self.run_cli(message(answer(record())), api_error(400))
+        append_rows(self.out / "output.csv", [["5", "torn"]])     # too short to say whose row it is
+        code, _, _, client = self.run_cli(message(answer(record(name="Ana"))), args=("--resume",))
+        self.assertEqual((code, len(client.calls), len(self.rows())), (0, 1, 3))
+        self.assertIn(["5", "torn"], self.rows())
+
+    def test_resume_puts_the_header_back_into_a_zero_byte_output_csv(self):
+        self.add_image("p_1_x.jpg")
+        self.out.mkdir()
+        (self.out / "output.csv").write_bytes(b"")
+        (self.out / ".processed").write_text("", encoding="utf-8")
+        code, _, _, client = self.run_cli(message(answer(record())), args=("--resume",))
+        self.assertEqual((code, len(client.calls)), (0, 1))
+        header, rows = read_csv(self.out / "output.csv")
+        self.assertEqual((header, len(rows)), (CSV_COLUMNS, 1))
+
     def test_resume_refuses_folders_it_cannot_resume_safely(self):
         self.add_image("p_1_x.jpg")
         self.out.mkdir()
@@ -193,7 +233,8 @@ class ResumeTests(CliCase):
         self.add_image("p_1_x.jpg")
         self.run_cli(message(answer(record(name=None))))
         self.assertTrue((self.out / "byhand" / "p_1_x.jpg").exists())
-        self.run_cli(message(answer(record())))
+        # An API failure neither copies nor removes, so only the fresh-run clear can delete the copy.
+        self.run_cli(api_error(400))
         self.assertFalse((self.out / "byhand" / "p_1_x.jpg").exists())
 
     def test_a_resumed_photo_that_now_reads_fine_leaves_byhand(self):
