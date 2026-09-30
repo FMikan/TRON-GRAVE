@@ -1,5 +1,6 @@
 import base64
 import io
+import json
 import math
 import random
 import time
@@ -202,72 +203,77 @@ Worked examples:
   as "Horvat" before writing the output field; do not leave any field in Cyrillic characters."""
 
 
-_EXTRACT_TOOL = {
-    "name": "extract_burial_records",
-    "description": "Record the burial data extracted from the tombstone photograph.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            # Internal scratchpad only: forces the model to read the whole stone before
-            # classifying, which improves the structured fields. Not written to the CSV.
-            "raw_text": {
-                "type": "string",
-                "description": "Verbatim transcription of everything legible on every marker belonging "
-                                "to this grave, written before any other field. This is your working "
-                                "transcript — read carefully first, then extract the structured fields "
-                                "below from it.",
-            },
-            # Internal scratchpad only (not written to the CSV): forces the model to reason through
-            # grouping, name normalisation and any inference in words before it fills `records`.
-            "reasoning": {
-                "type": "string",
-                "description": "Written after raw_text and before the structured fields, and NOT saved "
-                                "to the CSV. Reason briefly, in words, through the hard cases: which "
-                                "markers form one grave; reducing each name to the pure first name and "
-                                "surname (drop titles and maiden names); converting names to the "
-                                "nominative; and any high-confidence inferred year (age arithmetic, "
-                                "spouse proximity). Decide each person's fields here before filling "
-                                "`records`. A few focused lines, not an essay.",
-            },
-            "records": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "name":       {"type": ["string", "null"]},
-                        "surname":    {"type": ["string", "null"]},
-                        "birth_year": {"type": ["integer", "null"]},
-                        "birth_year_status": {
-                            "type": "string",
-                            "enum": ["present", "inferred", "absent_certain", "unreadable"],
-                            "description": "present = legible; inferred = not fully legible (missing, or a worn digit) but derived with high confidence (e.g. death year minus age, or a worn digit fixed from a spouse's year); absent_certain = no full year (none inscribed, or only an incomplete short year); unreadable = cannot read at all.",
-                        },
-                        "death_year": {"type": ["integer", "null"]},
-                        "death_year_status": {
-                            "type": "string",
-                            "enum": ["present", "inferred", "absent_certain", "unreadable"],
-                            "description": "present = legible; inferred = not fully legible (missing, or a worn digit) but derived with high confidence (e.g. birth year plus age, or a worn digit fixed from a spouse's year); absent_certain = no full year (none inscribed, or only an incomplete short year); unreadable = cannot read at all.",
-                        },
-                        "note": {"type": ["string", "null"]},
+_NULLABLE_STRING = {"anyOf": [{"type": "string"}, {"type": "null"}]}
+_NULLABLE_YEAR = {"anyOf": [{"type": "integer"}, {"type": "null"}]}
+_YEAR_STATUSES = ["present", "inferred", "absent_certain", "unreadable"]
+
+# The JSON the model must answer with (structured output). Structured outputs require every
+# object to list all its properties as required and to allow no others; a field that may be
+# empty is anyOf ... null.
+RESULT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        # Internal scratchpad only: forces the model to read the whole stone before
+        # classifying, which improves the structured fields. Not written to the CSV.
+        "raw_text": {
+            "type": "string",
+            "description": "Verbatim transcription of everything legible on every marker belonging "
+                           "to this grave, written before any other field. This is your working "
+                           "transcript — read carefully first, then extract the structured fields "
+                           "below from it.",
+        },
+        # Internal scratchpad only (not written to the CSV): forces the model to reason through
+        # grouping, name normalisation and any inference in words before it fills `records`.
+        "reasoning": {
+            "type": "string",
+            "description": "Written after raw_text and before the structured fields, and NOT saved "
+                           "to the CSV. Reason briefly, in words, through the hard cases: which "
+                           "markers form one grave; reducing each name to the pure first name and "
+                           "surname (drop titles and maiden names); converting names to the "
+                           "nominative; and any high-confidence inferred year (age arithmetic, "
+                           "spouse proximity). Decide each person's fields here before filling "
+                           "`records`. A few focused lines, not an essay.",
+        },
+        "records": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": _NULLABLE_STRING,
+                    "surname": _NULLABLE_STRING,
+                    "birth_year": _NULLABLE_YEAR,
+                    "birth_year_status": {
+                        "type": "string",
+                        "enum": _YEAR_STATUSES,
+                        "description": "present = legible; inferred = not fully legible (missing, or a worn digit) but derived with high confidence (e.g. death year minus age, or a worn digit fixed from a spouse's year); absent_certain = no full year (none inscribed, or only an incomplete short year); unreadable = cannot read at all.",
                     },
-                    "required": ["name", "surname", "birth_year", "birth_year_status", "death_year", "death_year_status", "note"],
+                    "death_year": _NULLABLE_YEAR,
+                    "death_year_status": {
+                        "type": "string",
+                        "enum": _YEAR_STATUSES,
+                        "description": "present = legible; inferred = not fully legible (missing, or a worn digit) but derived with high confidence (e.g. birth year plus age, or a worn digit fixed from a spouse's year); absent_certain = no full year (none inscribed, or only an incomplete short year); unreadable = cannot read at all.",
+                    },
+                    "note": _NULLABLE_STRING,
                 },
-            },
-            "error": {"type": ["string", "null"]},
-            "ambiguous_multiple_markers": {
-                "type": "boolean",
-                "description": "true if nearby plaques/crosses might belong to this grave but "
-                               "could not be included confidently (flagged in the notes); else false.",
+                "required": ["name", "surname", "birth_year", "birth_year_status",
+                             "death_year", "death_year_status", "note"],
+                "additionalProperties": False,
             },
         },
-        "required": ["raw_text", "reasoning", "records", "error", "ambiguous_multiple_markers"],
+        "error": _NULLABLE_STRING,
+        "ambiguous_multiple_markers": {
+            "type": "boolean",
+            "description": "true if nearby plaques/crosses might belong to this grave but "
+                           "could not be included confidently (flagged in the notes); else false.",
+        },
     },
+    "required": ["raw_text", "reasoning", "records", "error", "ambiguous_multiple_markers"],
+    "additionalProperties": False,
 }
 
-# Cache the system prompt + tool definition (stable across every image in a run).
-# Below the model's minimum cacheable prefix this silently has no effect and costs
-# nothing extra. Minimums: 1024 tok on Sonnet 5, 512 on Opus 5 / Fable 5 -- this
-# prompt runs ~4k tokens, so it caches on every model the UI offers.
+# Cache the system prompt (stable across every image in a run). Below the model's minimum
+# cacheable prefix this silently has no effect and costs nothing extra. Minimums: 1024 tok
+# on Sonnet 5, 512 on the other offered models -- this prompt runs ~4k tokens.
 _SYSTEM_BLOCKS = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
 
 _RETRY_DELAYS = [2, 4, 8]
@@ -437,23 +443,27 @@ def _jittered(delay: float) -> float:
     return delay * (1 + random.uniform(-0.25, 0.25))
 
 
+def _max_tokens(effort: str | None) -> int:
+    # Thinking shares this budget, and the top two effort levels can think well past 16k.
+    return 64000 if effort in ("xhigh", "max") else 16000
+
+
 def _call_api(client, model: str, mime: str, b64: str, effort: str | None = None):
     # temperature is only accepted on the Sonnet 4.x family. Sonnet 5, Opus 4.7/4.8,
     # Opus 5 and Fable 5 reject it with 400 "temperature is deprecated for this model".
     params: dict = {"temperature": 0} if "sonnet-4" in model else {}
+    # Structured output, not a forced tool call: Sonnet 5.5, Opus 5.5 and Fable 5.1 reject
+    # tool_choice "tool" with a 400. The answer arrives as one JSON text block.
+    output_config: dict = {"format": {"type": "json_schema", "schema": RESULT_SCHEMA}}
     if effort:
-        params["output_config"] = {"effort": effort}
-    return client.messages.create(
+        output_config["effort"] = effort
+    # Streamed, so the larger max_tokens ceilings stay clear of the SDK's timeout guard for
+    # non-streaming requests.
+    with client.messages.stream(
         model=model,
-        # Room for two scratchpad fields (raw_text + reasoning) plus every record on a
-        # multi-person grave, with headroom for thinking, which shares this budget (adaptive
-        # thinking runs by default on all three offered models when `thinking` is omitted).
-        # Only generated tokens are billed, so the ceiling is free until used; 16000 is the
-        # practical limit for a non-streaming request before SDK HTTP timeouts bite.
-        max_tokens=16000,
+        max_tokens=_max_tokens(effort),
         system=_SYSTEM_BLOCKS,
-        tools=[_EXTRACT_TOOL],
-        tool_choice={"type": "tool", "name": "extract_burial_records"},
+        output_config=output_config,
         **params,
         messages=[{
             "role": "user",
@@ -472,7 +482,25 @@ def _call_api(client, model: str, mime: str, b64: str, effort: str | None = None
                 },
             ],
         }],
-    )
+    ) as stream:
+        return stream.get_final_message()
+
+
+def _parse_answer(response) -> dict | None:
+    """The answer JSON as a dict with a list of record dicts, or None if it isn't one."""
+    text = next((b.text for b in response.content if b.type == "text"), None)
+    if text is None:
+        return None
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    records = data.get("records")
+    if not isinstance(records, list) or not all(isinstance(r, dict) for r in records):
+        return None
+    return data
 
 
 def process_image(client, model: str, path: Path, record_id: str,
@@ -525,30 +553,39 @@ def process_image(client, model: str, path: Path, record_id: str,
     # model extracted the data -- attach the real cost to every return from here on.
     cost = compute_cost(model, response.usage)
 
-    # A turn cut off at max_tokens can still carry a half-written tool_use block, whose
-    # input would parse into silently missing people. Bail before looking at it.
+    return _classify(response, cost, record_id)
+
+
+def _classify(response, cost: float, record_id: str) -> ImageResult:
+    """Turn one answered (and billed) API call into CSV rows and a verdict."""
+    if response.stop_reason == "refusal":
+        return ImageResult(
+            status='total_failure',
+            rows=[_empty_row(record_id, "odbijeno")],
+            reason="Model declined to answer (refusal)",
+            cost=cost,
+        )
+
+    # A turn cut off at max_tokens leaves half-written JSON, which would parse into silently
+    # missing people if it parsed at all. Bail before looking at it.
     if response.stop_reason == "max_tokens":
         return ImageResult(
             status='total_failure',
             rows=[_empty_row(record_id, "odgovor prekinut")],
-            reason="Response hit the max_tokens ceiling before the tool call finished",
+            reason="Response hit the max_tokens ceiling before the answer finished",
             cost=cost,
         )
 
-    # Adaptive thinking (on by default on all three offered models) can put a
-    # thinking block ahead of the tool call, and a safety refusal yields no tool call
-    # at all -- so look the block up instead of assuming index 0.
-    tool_use = next((b for b in response.content if b.type == "tool_use"), None)
-    if tool_use is None:
+    data = _parse_answer(response)
+    if data is None:
         return ImageResult(
             status='total_failure',
-            rows=[_empty_row(record_id, "nema odgovora")],
-            reason=f"Model returned no tool call (stop_reason: {response.stop_reason})",
+            rows=[_empty_row(record_id, "neispravan odgovor")],
+            reason=f"Model returned no valid JSON answer (stop_reason: {response.stop_reason})",
             cost=cost,
         )
 
-    data = tool_use.input
-    records = data.get("records", [])
+    records = data["records"]
     error = data.get("error")
 
     if error is not None and not records:
