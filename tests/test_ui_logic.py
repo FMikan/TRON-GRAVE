@@ -132,3 +132,28 @@ class LockTests(unittest.TestCase):
         ui_logic.release_lock(lock, mine)
         self.assertFalse(lock.exists())
         ui_logic.release_lock(lock, mine)          # already gone: no error
+
+
+class ProgressParsingTests(unittest.TestCase):
+    def test_start_and_result_lines_even_with_awkward_names(self):
+        parse = ui_logic.parse_progress
+        self.assertEqual(parse("[3/10] Processing OK (west section).jpg ...\n"),
+                         ("start", 3, 10, "OK (west section).jpg"))
+        self.assertEqual(parse("[3/10] FAILED: OK (west section).jpg (API call failed)\n"),
+                         ("result", 3, 10, "FAILED", None))
+        self.assertEqual(parse("[4/10] OK: ploča Čakovec.jpg (2 records) — $0.0184 (total: $2.35)\n"),
+                         ("result", 4, 10, "OK", 2.35))
+        self.assertIsNone(parse("Resume: skipping 3 already-processed image(s).\n"))
+
+    def test_exit_classification(self):
+        classify = ui_logic.classify_exit
+        self.assertEqual(classify(0, False, True, False), "done")
+        self.assertEqual(classify(2, False, True, False), "done")
+        self.assertEqual(classify(2, False, False, False), "failed")      # argparse error, no Done line
+        self.assertEqual(classify(0, False, False, True), "done")         # dry run
+        self.assertEqual(classify(130, True, False, False), "stopped")
+        self.assertEqual(classify(1, True, False, False), "stopped")      # Windows force-kill
+        self.assertEqual(classify(0, True, True, False), "done")          # Stop clicked after Done
+        self.assertEqual(classify(-9, False, False, False), "interrupted")
+        self.assertEqual(classify(130, False, False, False), "interrupted")
+        self.assertEqual(classify(1, False, False, False), "failed")

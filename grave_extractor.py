@@ -190,14 +190,14 @@ def main() -> int:
         extra_tags = () if matched else ("ID iz naziva",)
 
         if args.verbose:
-            print(f"[{idx}/{total}] Processing {img.name} ... ", end="", flush=True)
+            print(f"[{idx}/{total}] Processing {img.name} ...", flush=True)
 
         # Excel on Windows locks output.csv while it is open: find out before paying for a call.
         try:
             check_writable(output_csv)
         except OSError as e:
             if args.verbose:
-                print("FAILED (output.csv is locked)")
+                print(f"[{idx}/{total}] FAILED: {img.name} (output.csv is locked)", flush=True)
             fatal(f"Cannot write to {output_csv} ({e}). Close it (e.g. in Excel) and resume.", "csv-locked")
 
         try:
@@ -220,7 +220,7 @@ def main() -> int:
             api_failures_in_row = 0
         if result.fatal_tag or api_failures_in_row >= MAX_CONSECUTIVE_API_FAILURES:
             if args.verbose:
-                print(f"FAILED ({result.reason})")
+                print(f"[{idx}/{total}] FAILED: {img.name} ({result.reason})", flush=True)
             if result.fatal_tag:
                 fatal(f"API call failed: {result.reason}", result.fatal_tag)
             fatal(f"{MAX_CONSECUTIVE_API_FAILURES} API calls in a row failed; stopping so the rest "
@@ -253,19 +253,18 @@ def main() -> int:
 
         if result.status == "full_success":
             succeeded += 1
-            if args.verbose:
-                n = len(result.rows)
-                print(f"OK ({n} record{'s' if n != 1 else ''}){cost_suffix}")
+            n = len(result.rows)
+            verdict = f"OK: {img.name} ({n} record{'s' if n != 1 else ''}){cost_suffix}"
         elif result.status == "partial_success":
             partial += 1
             had_any_issue = True
-            if args.verbose:
-                print(f"PARTIAL ({result.reason}){cost_suffix}")
+            verdict = f"PARTIAL: {img.name} ({result.reason}){cost_suffix}"
         else:
             failed += 1
             had_any_issue = True
-            if args.verbose:
-                print(f"FAILED ({result.reason}){cost_suffix}")
+            verdict = f"FAILED: {img.name} ({result.reason}){cost_suffix}"
+        if args.verbose:
+            print(f"[{idx}/{total}] {verdict}", flush=True)
 
     print(f"Done. {total} images processed. {succeeded} succeeded, {partial} partial, {failed} failed.")
     print(f"Total cost: ${total_cost:.2f}")

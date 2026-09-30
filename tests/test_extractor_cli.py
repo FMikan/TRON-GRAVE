@@ -327,3 +327,15 @@ class InputTests(CliCase):
         code, _, err, client = self.run_cli(args=("--resume",))
         self.assertEqual((code, client.calls), (1, []))
         self.assertIn("[input-is-byhand]", err)
+
+
+class VerboseFormatTests(CliCase):
+    def test_each_photo_gets_a_start_line_and_a_result_line(self):
+        self.add_image("p_1_x.jpg")
+        self.add_image("p_2_x.jpg")
+        _, out, _, _ = self.run_cli(message(answer(record())), message(answer(record(name=None))))
+        lines = out.splitlines()
+        self.assertEqual(lines[0], "[1/2] Processing p_1_x.jpg ...")
+        self.assertRegex(lines[1], r"^\[1/2\] OK: p_1_x\.jpg \(1 record\) — \$\d+\.\d{4} \(total: \$\d+\.\d{2}\)$")
+        self.assertEqual(lines[2], "[2/2] Processing p_2_x.jpg ...")
+        self.assertTrue(lines[3].startswith("[2/2] PARTIAL: p_2_x.jpg (Name or surname could not be read)"))

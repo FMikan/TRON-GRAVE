@@ -5,7 +5,6 @@ import atexit
 import csv
 import os
 import queue
-import re
 import signal
 import subprocess
 import sys
@@ -49,13 +48,6 @@ COST_PER_IMAGE_BY_MODEL = {
 }
 _DEFAULT_COST_PER_IMAGE_ESTIMATE = 0.01
 
-PROGRESS_RE = re.compile(r"^\[(\d+)/(\d+)\]\s")
-# Anchored to the " ... " the extractor prints between the filename and the verdict, so a
-# photo named "OK (west section).jpg" cannot make a FAILED image count as OK.
-RESULT_RE = re.compile(r"\.\.\. (OK|PARTIAL|FAILED)(?:\s|\(|$)")
-DONE_RE = re.compile(r"^Done\. \d+ images processed")
-COST_RE = re.compile(r"\(total: \$([0-9.]+)\)")
-
 
 class App:
     def __init__(self, root: tk.Tk):
@@ -94,6 +86,9 @@ class App:
         self._launched_dry_run = False
         self._saw_done_line = False
         self._last_stderr = ""
+        self._run_files: dict[int, str] = {}
+        self._flagged: set[str] = set()
+        self._done_count = 0
         self._api_key: str = ""
         self._settings: dict = {}
 
@@ -597,7 +592,6 @@ class App:
         else:
             self.pgid = self.proc.pid
 
-        self.run_start_time = time.monotonic()
         self.progress.configure(mode="indeterminate", maximum=100)
         self.progress.start(80)
         self._append_log(f"$ {' '.join(cmd)}\n", "info")
@@ -697,32 +691,27 @@ class App:
         if len(line) > MAX_LINE_CHARS:
             line = line[:MAX_LINE_CHARS] + "…[truncated]\n"
 
-        cm = COST_RE.search(line)
-        if cm:
-            try:
-                self.total_cost = float(cm.group(1))
-            except ValueError:
-                pass
-
-        m = PROGRESS_RE.match(line)
-        if m:
-            done = int(m.group(1))
-            total = int(m.group(2))
-            rm = RESULT_RE.search(line)
-            if rm:
-                tag = rm.group(1)
-                if tag == "OK":
-                    self.counters["ok"] += 1
-                elif tag == "PARTIAL":
-                    self.counters["partial"] += 1
-                else:
-                    self.counters["failed"] += 1
-            self._update_progress(done, total)
-
-        if DONE_RE.match(line):
-            self._saw_done_line = True
-            self._append_log(line, "done")
-            return
+        if kind == "stdout":
+            event = ui_logic.parse_progress(line)
+            if event and event[0] == "start":
+                _, k, total, name = event
+                self._run_files[k] = name
+                if self.run_start_time is None:
+                    self.run_start_time = time.monotonic()
+                self._update_progress(k - 1, total, current=name)
+            elif event:
+                _, k, total, verdict, total_cost = event
+                if total_cost is not None:
+                    self.total_cost = total_cost
+                self.counters[{"OK": "ok", "PARTIAL": "partial"}.get(verdict, "failed")] += 1
+                if verdict != "OK":
+                    self._flagged.add(self._run_files.get(k, ""))
+                self._done_count = k
+                self._update_progress(k, total)
+            if ui_logic.DONE_RE.match(line):
+                self._saw_done_line = True
+                self._append_log(line, "done")
+                return
 
         tag = "stderr" if kind == "stderr" else None
         prefix = "[stderr] " if kind == "stderr" else ""
@@ -733,25 +722,22 @@ class App:
     def _last_error_line(self) -> str:
         return self._last_stderr or "Pojedinosti su u zapisniku ispod."
 
-    def _update_progress(self, done: int, total: int):
+    def _update_progress(self, done: int, total: int, current: str | None = None):
         if self.last_total != total:
             self.last_total = total
             self.progress.stop()
-            self.progress.configure(mode="determinate", maximum=total, value=done)
-        else:
-            self.progress.configure(value=done)
+            self.progress.configure(mode="determinate", maximum=max(total, 1))
+        self.progress.configure(value=done)
         ok = self.counters["ok"]
         partial = self.counters["partial"]
         failed = self.counters["failed"]
-        eta_str = ""
+        parts = [f"{done}/{total}", f"OK: {ok} · za pregled: {partial} · neuspjelo: {failed}",
+                 f"potrošeno: ${self.total_cost:.2f}"]
         if self.run_start_time and 0 < done < total:
             elapsed = time.monotonic() - self.run_start_time
-            remaining = (total - done) * (elapsed / done)
-            eta_str = f" — preostalo ~{self._fmt_duration(remaining)}"
-        self.status_var.set(
-            f"{done}/{total} — {ok} OK · {partial} za pregled · {failed} neuspjelo"
-            f" · potrošeno: ${self.total_cost:.2f}{eta_str}"
-        )
+            parts.append(f"preostalo ~{self._fmt_duration((total - done) * elapsed / done)}")
+        status = " — ".join(parts)
+        self.status_var.set(f"Obrađujem {current} · {status}" if current else status)
 
     @staticmethod
     def _fmt_duration(secs: float) -> str:
@@ -786,16 +772,20 @@ class App:
 
     def _on_proc_exit(self, rc: int):
         self.progress.stop()
-        if self.last_total:
-            self.progress.configure(mode="determinate", value=self.last_total)
+        outcome = ui_logic.classify_exit(rc, self._stop_requested, self._saw_done_line,
+                                         self._launched_dry_run)
+        total = self.last_total or 0
+        # Real progress: a stopped or failed run must not look finished.
+        self.progress.configure(mode="determinate", maximum=max(total, 1),
+                                value=total if outcome == "done" else self._done_count)
 
         is_retry = self._is_retry_run
-        out_dir = self._run_out_dir or Path(self.output_var.get())
         is_dry = self._launched_dry_run
-        # Windows has no signal exit codes -- a killed child reports 1, so the only reliable
-        # signal that a non-zero exit was deliberate is that we asked for it.
-        was_stopped = (rc == 130 or rc < 0 or self._stop_requested)
-
+        out_dir = self._run_out_dir or Path(self.output_var.get())
+        self.proc = None
+        self.pgid = None
+        self._is_retry_run = False
+        self._run_out_dir = None
         self._set_running(False)
         self._release_lock()
 
@@ -805,13 +795,14 @@ class App:
             self.btn_open_csv.configure(state="normal")
         if main_dir and (main_dir / "byhand").is_dir():
             self.btn_open_byhand.configure(state="normal")
+        self._refresh_retry_button()
 
         ok = self.counters["ok"]
         partial = self.counters["partial"]
         failed = self.counters["failed"]
         saved = ok + partial + failed
 
-        if was_stopped:
+        if outcome == "stopped":
             self.status_var.set(f"Zaustavljeno — obrađeno slika: {saved}.")
             messagebox.showinfo(
                 "Zaustavljeno",
@@ -819,16 +810,13 @@ class App:
                 "Za nastavak označite „Nastavi (preskoči obrađene)” prije ponovnog "
                 "pokretanja — inače se sve obrađene slike ponovno šalju API-ju i plaćaju dvaput.",
             )
-        # Exit code 2 means "finished with issues", but argparse and the CPython launcher
-        # also exit 2 on failures that never processed anything -- so require the
-        # extractor's own completion line before believing it.
-        elif rc == 0 or (rc == 2 and (is_dry or self._saw_done_line)):
+        elif outcome == "done":
             self._append_log(f"\n[izlazni kod {rc}]\n", "info")
             if is_dry:
                 self.status_var.set("Probni prolaz završen.")
             else:
                 self.status_var.set(
-                    f"Gotovo — {ok} OK · {partial} za pregled · {failed} neuspjelo · ${self.total_cost:.2f}"
+                    f"Gotovo — OK: {ok} · za pregled: {partial} · neuspjelo: {failed} · ${self.total_cost:.2f}"
                 )
                 self._notify_done()
                 self._show_summary_popup(
@@ -836,18 +824,19 @@ class App:
                     title="Sažetak ponovne obrade" if is_retry else "Sažetak obrade",
                 )
         else:
-            self.status_var.set(f"Neuspjelo (izlazni kod {rc}).")
             self._append_log(f"\n[neuspjelo, izlazni kod {rc}]\n", "stderr")
-            messagebox.showerror(
-                "Obrada nije uspjela",
-                f"Obrada je završila s izlaznim kodom {rc}.\n\n{self._last_error_line()}",
-            )
-
-        self.proc = None
-        self.pgid = None
-        self._is_retry_run = False
-        self._run_out_dir = None
-        self._refresh_retry_button()
+            if outcome == "interrupted":
+                self.status_var.set(f"Prekinuto (izlazni kod {rc}).")
+                messagebox.showerror(
+                    "Obrada prekinuta",
+                    f"Obrada je neočekivano prekinuta (izlazni kod {rc}).\n\n{self._last_error_line()}",
+                )
+            else:
+                self.status_var.set(f"Neuspjelo (izlazni kod {rc}).")
+                messagebox.showerror(
+                    "Obrada nije uspjela",
+                    f"Obrada je završila s izlaznim kodom {rc}.\n\n{self._last_error_line()}",
+                )
 
     def _show_summary_popup(self, csv_path: Path, title: str = "Sažetak obrade"):
         ok = self.counters["ok"]
@@ -1025,6 +1014,9 @@ class App:
         self._stop_requested = False
         self._saw_done_line = False
         self._last_stderr = ""
+        self._run_files = {}
+        self._flagged = set()
+        self._done_count = 0
         self.progress.configure(mode="determinate", value=0, maximum=100)
         self.log.configure(state="normal")
         self.log.delete("1.0", "end")
@@ -1066,9 +1058,9 @@ class App:
             subprocess.Popen(
                 [
                     "notify-send", "TRON-GRAVE",
-                    f"Gotovo — {self.counters['ok']} OK, "
-                    f"{self.counters['partial']} za pregled, "
-                    f"{self.counters['failed']} neuspjelo",
+                    f"Gotovo — OK: {self.counters['ok']}, "
+                    f"za pregled: {self.counters['partial']}, "
+                    f"neuspjelo: {self.counters['failed']}",
                 ],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )

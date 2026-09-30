@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -128,3 +129,45 @@ def release_lock(lock: Path, token: str) -> None:
             lock.unlink()
     except OSError:
         pass
+
+
+# ---- extractor output --------------------------------------------------------------------
+
+START_RE = re.compile(r"^\[(\d+)/(\d+)\] Processing (.+) \.\.\.$")
+# Anchored to the "[k/N] " prefix, so a photo named "OK (west section).jpg" cannot make a
+# FAILED image count as OK.
+RESULT_RE = re.compile(r"^\[(\d+)/(\d+)\] (OK|PARTIAL|FAILED): ")
+COST_RE = re.compile(r"\(total: \$([0-9.]+)\)$")
+DONE_RE = re.compile(r"^Done\. \d+ images processed")
+
+
+def parse_progress(line: str):
+    """("start", k, n, filename), ("result", k, n, verdict, total cost or None), or None."""
+    line = line.rstrip("\r\n")
+    m = START_RE.match(line)
+    if m:
+        return ("start", int(m.group(1)), int(m.group(2)), m.group(3))
+    m = RESULT_RE.match(line)
+    if m:
+        cost = COST_RE.search(line)
+        return ("result", int(m.group(1)), int(m.group(2)), m.group(3),
+                float(cost.group(1)) if cost else None)
+    return None
+
+
+def classify_exit(rc: int, stop_requested: bool, saw_done: bool, is_dry: bool) -> str:
+    """How a run ended: "done", "stopped" (the user's Stop), "interrupted" (killed without a
+    Stop click) or "failed"."""
+    # Windows has no signal exit codes -- a killed child reports 1 -- so a Stop click is the
+    # only reliable sign a non-zero exit was deliberate. The Done line outranks it: Stop
+    # clicked just after the last photo did not stop anything.
+    if stop_requested and not saw_done:
+        return "stopped"
+    # Exit code 2 means "finished with issues", but argparse and the CPython launcher also
+    # exit 2 on failures that never processed anything -- so require the extractor's own
+    # completion line before believing it.
+    if rc == 0 or (rc == 2 and (is_dry or saw_done)):
+        return "done"
+    if rc == 130 or rc < 0:
+        return "interrupted"
+    return "failed"
