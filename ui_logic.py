@@ -1,11 +1,14 @@
 """Tk-free helpers behind the desktop GUI, kept apart from grave_ui.py so they can be tested."""
 
+import csv
 import json
 import os
 import re
 import sys
 import uuid
 from pathlib import Path
+
+from extractor.csv_writer import read_csv
 
 # Weakest to strongest: "Ponovi byhand/" never steps down this list.
 MODELS = [
@@ -127,7 +130,7 @@ def release_lock(lock: Path, token: str) -> None:
     try:
         if lock.read_text(encoding="utf-8") == token:
             lock.unlink()
-    except OSError:
+    except (OSError, ValueError):     # ValueError: the file is not text, so it is not ours
         pass
 
 
@@ -173,3 +176,53 @@ def classify_exit(rc: int, stop_requested: bool, saw_done: bool, is_dry: bool) -
     if rc == 130 or rc < 0:
         return "interrupted"
     return "failed"
+
+
+# ---- run checks and texts ------------------------------------------------------------
+
+def same_dir(a: Path, b: Path) -> bool:
+    """True when a and b are the same folder (samefile when both exist, else resolved paths)."""
+    try:
+        if os.path.exists(a) and os.path.exists(b):
+            return os.path.samefile(a, b)
+        return Path(a).resolve() == Path(b).resolve()
+    except OSError:
+        return False
+
+
+def csv_data_rows(path: Path) -> int:
+    """Data rows in output.csv; 0 when it is missing or unreadable (never raises)."""
+    try:
+        return len(read_csv(path)[1])
+    except (OSError, ValueError, csv.Error):
+        return 0
+
+
+# Why "Nastavi" is greyed out, per extractor.csv_writer.resume_problem() code.
+RESUME_BLOCKERS = {
+    "old-format": "output.csv ima drugačije stupce — izradila ga je starija verzija programa "
+                  "ili je ponovno spremljen iz Excela",
+    "no-processed": "nedostaje popis obrađenih slika (.processed), pa bi se sve slike ponovno poslale",
+    "missing-csv": "output.csv nedostaje",
+    "unreadable": "output.csv se ne može pročitati",
+}
+
+# The extractor's fatal errors read "error: [tag] ...".
+FATAL_TAG_RE = re.compile(r"^error: \[([a-z0-9-]+)\] ")
+FATAL_EXPLANATIONS = {
+    "api-401": "API ključ nije ispravan ili je opozvan.",
+    "api-402": "Problem s naplatom — provjerite plaćanje i stanje računa na console.anthropic.com.",
+    "api-403": "Ovaj API ključ nema pristup odabranom modelu.",
+    "api-404": "Odabrani model ne postoji.",
+    "spend-cap": "Dosegnut je mjesečni limit potrošnje za API.",
+    "api-down": "API tri puta zaredom nije uspio. Provjerite internetsku vezu, stanje računa i limite potrošnje.",
+    "csv-locked": "output.csv je zaključan — zatvorite ga (npr. u Excelu).",
+    "resume-refused": "Nastavak nije moguć za ovu izlaznu mapu.",
+    "input-is-byhand": "Ulazna mapa ne smije biti byhand/ mapa izlazne mape.",
+}
+
+
+def explain_failure(stderr_line: str) -> str | None:
+    """A Croatian explanation of the extractor's tagged fatal error, if the line has a tag."""
+    m = FATAL_TAG_RE.match(stderr_line or "")
+    return FATAL_EXPLANATIONS.get(m.group(1)) if m else None

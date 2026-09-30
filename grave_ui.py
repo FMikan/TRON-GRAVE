@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+import traceback
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
@@ -18,6 +19,7 @@ from tkinter.scrolledtext import ScrolledText
 from dotenv import dotenv_values
 
 import ui_logic
+from extractor.csv_writer import read_processed, resume_problem
 from extractor.file_utils import is_supported_image
 from _version import __version__
 
@@ -53,7 +55,7 @@ class App:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title(f"TRON-GRAVE {__version__}")
-        # Wide enough for the full control row: Start/Stop, both checkboxes, and the three
+        # Wide enough for the full control row: Start/Stop, the dry-run checkbox, and the three
         # Open/Retry buttons. At 960 the last button was clipped off-screen.
         self.root.geometry("1180x700")
         self.root.minsize(900, 460)
@@ -64,7 +66,6 @@ class App:
         self.model_var = tk.StringVar(value=ui_logic.MODEL_LABELS[ui_logic.DEFAULT_MODEL])
         self.effort_var = tk.StringVar(value=ui_logic.EFFORT_LABELS[ui_logic.DEFAULT_EFFORT])
         self.dry_run_var = tk.BooleanVar(value=False)
-        self.resume_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="Spremno.")
         self.preview_var = tk.StringVar(value="")
         self.search_var = tk.StringVar()
@@ -95,6 +96,7 @@ class App:
         self._load_settings()
         self._apply_theme()
         self._build_ui()
+        self.root.report_callback_exception = self._report_callback_exception
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         atexit.register(self._atexit_kill)
         self.root.after(50, self._drain_queue)
@@ -238,7 +240,7 @@ class App:
 
         ctrl = ttk.Frame(self.root)
         ctrl.grid(row=2, column=0, sticky="ew", padx=14)
-        ctrl.columnconfigure(4, weight=1)
+        ctrl.columnconfigure(3, weight=1)
 
         self.btn_start = ttk.Button(
             ctrl, text="▶  Pokreni", command=self._on_start, style="Accent.TButton"
@@ -248,29 +250,25 @@ class App:
         self.btn_stop.grid(row=0, column=1, padx=6, pady=4)
         self.chk_dry = ttk.Checkbutton(ctrl, text="Probni prolaz (samo popis)", variable=self.dry_run_var)
         self.chk_dry.grid(row=0, column=2, padx=12)
-        self.chk_resume = ttk.Checkbutton(
-            ctrl, text="Nastavi (preskoči obrađene)", variable=self.resume_var
-        )
-        self.chk_resume.grid(row=0, column=3, padx=(0, 12))
 
         self.btn_open_csv = ttk.Button(
             ctrl, text="Otvori output.csv",
             command=lambda: self._open_path(Path(self.output_var.get()) / "output.csv"),
             state="disabled",
         )
-        self.btn_open_csv.grid(row=0, column=5, padx=6)
+        self.btn_open_csv.grid(row=0, column=4, padx=6)
         self.btn_open_byhand = ttk.Button(
             ctrl, text="Otvori byhand/",
             command=lambda: self._open_path(Path(self.output_var.get()) / "byhand"),
             state="disabled",
         )
-        self.btn_open_byhand.grid(row=0, column=6, padx=6)
+        self.btn_open_byhand.grid(row=0, column=5, padx=6)
         self.btn_retry_byhand = ttk.Button(
             ctrl, text="Ponovi byhand/",
             command=self._on_retry_byhand,
             state="disabled",
         )
-        self.btn_retry_byhand.grid(row=0, column=7, padx=(6, 0))
+        self.btn_retry_byhand.grid(row=0, column=6, padx=(6, 0))
 
         prog = ttk.Frame(self.root)
         prog.grid(row=3, column=0, sticky="ew", padx=14, pady=8)
@@ -452,12 +450,18 @@ class App:
             )
             return
         self._api_key = api_key
-        self._start_in(in_dir, Path(out_path), self._model_id(), self._effort_id(),
-                       resume=self.resume_var.get())
+        out_dir = Path(out_path)
+        if ui_logic.same_dir(in_dir, out_dir / "byhand"):
+            messagebox.showerror(
+                "Neispravna ulazna mapa",
+                "Ulazna mapa ne smije biti byhand/ mapa ove izlazne mape.\nOdaberite drugu izlaznu mapu.",
+            )
+            return
+        self._start_in(in_dir, out_dir, self._model_id(), self._effort_id())
 
     def _start_in(self, in_dir: Path, out_dir: Path, model: str, effort: str,
-                  resume: bool, retry: bool = False) -> None:
-        """Lock the output folder, deal with an existing output.csv, then launch the extractor."""
+                  retry: bool = False) -> None:
+        """Lock the output folder, settle fresh run vs resume, then launch the extractor."""
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
@@ -466,36 +470,117 @@ class App:
         if not self._take_lock(out_dir):
             return
         try:
-            if not resume and not self._rotate_existing_output(out_dir):
+            mode = self._choose_output_mode(in_dir, out_dir)
+            if (mode is None
+                    or (mode == "fresh" and not self._backup_outputs(out_dir))
+                    or not self._csv_writable(out_dir)):
                 self._release_lock()
                 return
-            self._launch(in_dir, out_dir, model, effort, resume=resume, retry=retry)
+            self._launch(in_dir, out_dir, model, effort, resume=(mode == "resume"), retry=retry)
         except BaseException:
             self._release_lock()
             raise
 
-    def _rotate_existing_output(self, out_dir: Path) -> bool:
-        """Offer a backup of an existing output.csv before a fresh run; False to abort."""
-        existing = out_dir / "output.csv"
-        if not existing.exists():
-            return True
-        rows = self._csv_row_count(existing)
-        # Timestamped so a second overwrite cannot clobber the first backup.
-        backup = out_dir / f"output.{time.strftime('%Y%m%d-%H%M%S')}.bak.csv"
-        choice = messagebox.askyesnocancel(
-            "output.csv već postoji",
-            f"{existing} već postoji (redaka: {rows}).\n\n"
-            f"Da — spremi kopiju kao {backup.name} i prepiši\n"
-            "Ne — prepiši bez kopije\n"
-            "Odustani — prekini",
-        )
-        if choice is None:
-            return False
+    def _choose_output_mode(self, in_dir: Path, out_dir: Path) -> str | None:
+        """'fresh', 'resume', or None when the user cancels, for a run into out_dir."""
+        csv_path = out_dir / "output.csv"
+        processed = read_processed(out_dir)
+        if not csv_path.exists():
+            if processed and not messagebox.askyesno(
+                "Nedostaje output.csv",
+                f"output.csv nedostaje, ali .processed bilježi obrađene slike (ukupno: {len(processed)}).\n\n"
+                "Novi početak ponovno će ih poslati API-ju (i platiti). Nastaviti?",
+            ):
+                return None
+            return "fresh"
         try:
-            if choice:
-                existing.replace(backup)
+            names = {f.name for f in in_dir.iterdir() if f.is_file() and is_supported_image(f)}
+        except OSError:
+            names = set()
+        problem = resume_problem(out_dir)
+        return self._ask_existing_output(
+            csv_path, ui_logic.csv_data_rows(csv_path), len(names & processed), len(names),
+            ui_logic.RESUME_BLOCKERS.get(problem) if problem else None,
+        )
+
+    def _ask_existing_output(self, csv_path: Path, rows: int, done: int, total: int,
+                             blocker: str | None) -> str | None:
+        win, choice = self._build_existing_output_dialog(csv_path, rows, done, total, blocker)
+        win.wait_visibility()
+        win.grab_set()
+        self.root.wait_window(win)
+        return choice["value"]
+
+    def _build_existing_output_dialog(self, csv_path: Path, rows: int, done: int, total: int,
+                                      blocker: str | None):
+        win = tk.Toplevel(self.root)
+        win.title("output.csv već postoji")
+        win.configure(background=self._bg)
+        win.transient(self.root)
+        win.resizable(False, False)
+        choice = {"value": None}
+
+        def pick(value):
+            choice["value"] = value
+            win.destroy()
+
+        frm = ttk.Frame(win, padding=16)
+        frm.grid(row=0, column=0, sticky="nsew")
+        ttk.Label(
+            frm, justify="left",
+            text=f"{csv_path} već postoji (redaka: {rows}).\n"
+                 f"Već obrađeno: {done}/{total} slika iz ulazne mape.",
+        ).grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(
+            frm, justify="left", foreground="#9aa0a6",
+            text="Nastavi — obradi samo preostale slike i dopiši ih.\n"
+                 "Prepiši — spremi kopiju (output.<vrijeme>.bak.csv i byhand.<vrijeme>.bak) "
+                 "i kreni ispočetka.",
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        if blocker:
+            ttk.Label(frm, text=f"Nastavak nije moguć: {blocker}.", foreground="#ff7b72",
+                      wraplength=520, justify="left").grid(row=2, column=0, columnspan=3,
+                                                           sticky="w", pady=(8, 0))
+        win.btn_resume = ttk.Button(frm, text="Nastavi", style="Accent.TButton",
+                                    command=lambda: pick("resume"),
+                                    state="disabled" if blocker else "normal")
+        win.btn_fresh = ttk.Button(frm, text="Prepiši", command=lambda: pick("fresh"))
+        win.btn_cancel = ttk.Button(frm, text="Odustani", command=lambda: pick(None))
+        win.btn_resume.grid(row=3, column=0, padx=(0, 6), pady=(14, 0))
+        win.btn_fresh.grid(row=3, column=1, padx=6, pady=(14, 0))
+        win.btn_cancel.grid(row=3, column=2, padx=(6, 0), pady=(14, 0))
+        win.bind("<Escape>", lambda _e: pick(None))
+        win.protocol("WM_DELETE_WINDOW", lambda: pick(None))
+        (win.btn_fresh if blocker else win.btn_resume).focus_set()
+        return win, choice
+
+    def _backup_outputs(self, out_dir: Path) -> bool:
+        """Move output.csv and byhand/ aside, with one timestamp, before a fresh run."""
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        try:
+            csv_path = out_dir / "output.csv"
+            if csv_path.exists():
+                csv_path.replace(out_dir / f"output.{stamp}.bak.csv")
+            byhand = out_dir / "byhand"
+            if byhand.is_dir():
+                byhand.rename(out_dir / f"byhand.{stamp}.bak")
         except OSError as e:
-            messagebox.showerror("Ne mogu spremiti kopiju", str(e))
+            messagebox.showerror("Ne mogu spremiti kopiju",
+                                 f"{e}\n\nAko je output.csv otvoren (npr. u Excelu), zatvorite ga.")
+            return False
+        return True
+
+    def _csv_writable(self, out_dir: Path) -> bool:
+        """Excel on Windows locks output.csv while it is open: catch that before paying."""
+        csv_path = out_dir / "output.csv"
+        if not csv_path.exists():
+            return True
+        try:
+            with open(csv_path, "a", encoding="utf-8"):
+                pass
+        except OSError:
+            messagebox.showerror("Datoteka je zaključana",
+                                 f"Ne mogu pisati u {csv_path}.\n\nZatvorite je (npr. u Excelu) pa pokušajte ponovno.")
             return False
         return True
 
@@ -722,6 +807,15 @@ class App:
     def _last_error_line(self) -> str:
         return self._last_stderr or "Pojedinosti su u zapisniku ispod."
 
+    def _report_callback_exception(self, exc_type, exc, tb):
+        """Show errors from Tk callbacks: the windowed exe has no console to print them to."""
+        try:
+            self._append_log("".join(traceback.format_exception(exc_type, exc, tb)), "stderr")
+            messagebox.showerror("Neočekivana greška",
+                                 f"{exc_type.__name__}: {exc}\n\nPojedinosti su u zapisniku.")
+        except tk.TclError:
+            pass
+
     def _update_progress(self, done: int, total: int, current: str | None = None):
         if self.last_total != total:
             self.last_total = total
@@ -802,14 +896,14 @@ class App:
         failed = self.counters["failed"]
         saved = ok + partial + failed
 
+        again = "Ponovi byhand/" if is_retry else "Pokreni"
+        where = "byhand_retry/output.csv" if is_retry else "output.csv"
+        resume_hint = (f"Za nastavak kliknite {again} i odaberite Nastavi — već obrađene slike "
+                       "neće se ponovno slati (ni plaćati).")
         if outcome == "stopped":
             self.status_var.set(f"Zaustavljeno — obrađeno slika: {saved}.")
-            messagebox.showinfo(
-                "Zaustavljeno",
-                f"Zaustavljeno. Obrađeno slika: {saved}; spremljeno u output.csv.\n\n"
-                "Za nastavak označite „Nastavi (preskoči obrađene)” prije ponovnog "
-                "pokretanja — inače se sve obrađene slike ponovno šalju API-ju i plaćaju dvaput.",
-            )
+            messagebox.showinfo("Zaustavljeno",
+                                f"Zaustavljeno. Obrađeno slika: {saved}; spremljeno u {where}.\n\n{resume_hint}")
         elif outcome == "done":
             self._append_log(f"\n[izlazni kod {rc}]\n", "info")
             if is_dry:
@@ -828,15 +922,16 @@ class App:
             self.status_var.set(f"Prekinuto (izlazni kod {rc}).")
             messagebox.showerror(
                 "Obrada prekinuta",
-                f"Obrada je neočekivano prekinuta (izlazni kod {rc}).\n\n{self._last_error_line()}",
+                f"Obrada je neočekivano prekinuta (izlazni kod {rc}).\n\n"
+                f"{self._last_error_line()}\n\n{resume_hint}",
             )
         else:
             self._append_log(f"\n[neuspjelo, izlazni kod {rc}]\n", "stderr")
             self.status_var.set(f"Neuspjelo (izlazni kod {rc}).")
-            messagebox.showerror(
-                "Obrada nije uspjela",
-                f"Obrada je završila s izlaznim kodom {rc}.\n\n{self._last_error_line()}",
-            )
+            lead = (ui_logic.explain_failure(self._last_stderr)
+                    or f"Obrada je završila s izlaznim kodom {rc}.")
+            messagebox.showerror("Obrada nije uspjela",
+                                 f"{lead}\n\n{self._last_error_line()}\n\n{resume_hint}")
 
     def _show_summary_popup(self, csv_path: Path, title: str = "Sažetak obrade"):
         ok = self.counters["ok"]
@@ -994,7 +1089,6 @@ class App:
             self.model_combo.configure(state="disabled")
             self.effort_combo.configure(state="disabled")
             self.chk_dry.configure(state="disabled")
-            self.chk_resume.configure(state="disabled")
             self.status_var.set("Pokrećem…")
         else:
             self.btn_start.configure(state="normal")
@@ -1004,7 +1098,6 @@ class App:
             self.model_combo.configure(state="readonly")
             self.effort_combo.configure(state="readonly")
             self.chk_dry.configure(state="normal")
-            self.chk_resume.configure(state="normal")
 
     def _reset_run_state(self):
         self.counters = {"ok": 0, "partial": 0, "failed": 0}
@@ -1025,14 +1118,6 @@ class App:
         self._search_index = "1.0"
 
     # ----- helpers ----------------------------------------------------------
-
-    @staticmethod
-    def _csv_row_count(p: Path) -> int:
-        try:
-            with p.open(encoding="utf-8-sig") as f:
-                return max(0, sum(1 for _ in f) - 1)
-        except OSError:
-            return 0
 
     def _open_path(self, p: Path):
         if not p.exists():

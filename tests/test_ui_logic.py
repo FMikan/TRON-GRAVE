@@ -133,6 +133,14 @@ class LockTests(unittest.TestCase):
         self.assertFalse(lock.exists())
         ui_logic.release_lock(lock, mine)          # already gone: no error
 
+    def test_a_lock_file_that_is_not_text_is_left_in_place(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        lock = tmp / ui_logic.LOCK_NAME
+        lock.write_bytes(b"\xff\xfe")
+        ui_logic.release_lock(lock, ui_logic.new_lock_token())     # closing the window must not fail
+        self.assertEqual(lock.read_bytes(), b"\xff\xfe")
+
 
 class ProgressParsingTests(unittest.TestCase):
     def test_start_and_result_lines_even_with_awkward_names(self):
@@ -160,3 +168,49 @@ class ProgressParsingTests(unittest.TestCase):
         self.assertEqual(classify(-9, False, False, False), "interrupted")
         self.assertEqual(classify(130, False, False, False), "interrupted")
         self.assertEqual(classify(1, False, False, False), "failed")
+
+
+class RunTextTests(unittest.TestCase):
+    def test_fatal_tags_are_explained_in_croatian(self):
+        self.assertIn("naplat", ui_logic.explain_failure("error: [api-402] API call failed: ..."))
+        self.assertIn("zaključan", ui_logic.explain_failure("error: [csv-locked] Cannot write"))
+        self.assertIsNone(ui_logic.explain_failure("Traceback (most recent call last):"))
+
+    def test_every_fatal_tag_and_resume_problem_has_a_text(self):
+        for tag in ("api-401", "api-402", "api-403", "api-404", "spend-cap", "api-down",
+                    "csv-locked", "resume-refused", "input-is-byhand"):
+            self.assertIn(tag, ui_logic.FATAL_EXPLANATIONS)
+        for code in ("old-format", "no-processed", "missing-csv", "unreadable"):
+            self.assertIn(code, ui_logic.RESUME_BLOCKERS)
+
+    def test_the_row_count_survives_an_excel_saved_file(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        path = tmp / "output.csv"
+        path.write_bytes("ID;Name;Surname\r\n1;Mišo;Kovač\r\n2;Ana;Babić\r\n".encode("cp1250"))
+        self.assertEqual(ui_logic.csv_data_rows(path), 2)
+        self.assertEqual(ui_logic.csv_data_rows(tmp / "missing.csv"), 0)
+
+
+class SameDirTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        (self.tmp / "out" / "byhand").mkdir(parents=True)
+        (self.tmp / "out" / "elsewhere").mkdir()
+
+    def test_another_spelling_of_one_folder_is_the_same_folder(self):
+        byhand = self.tmp / "out" / "byhand"
+        self.assertTrue(ui_logic.same_dir(self.tmp / "out" / "elsewhere" / ".." / "byhand", byhand))
+        self.assertFalse(ui_logic.same_dir(self.tmp / "out" / "elsewhere", byhand))
+
+    def test_a_folder_that_does_not_exist_yet_is_compared_by_its_path(self):
+        missing = self.tmp / "new" / "byhand"
+        self.assertTrue(ui_logic.same_dir(self.tmp / "new" / "x" / ".." / "byhand", missing))
+        self.assertFalse(ui_logic.same_dir(self.tmp / "new" / "other", missing))
+
+    def test_the_filesystems_verdict_beats_the_spelling(self):
+        # On macOS and Windows out/ByHand and out/byhand are one folder, yet resolve() keeps
+        # the typed case: the filesystem's own answer has to decide.
+        with mock.patch.object(ui_logic.os.path, "samefile", return_value=True):
+            self.assertTrue(ui_logic.same_dir(self.tmp / "out" / "elsewhere", self.tmp / "out" / "byhand"))
