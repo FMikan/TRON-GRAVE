@@ -805,10 +805,19 @@ class CloseTests(AppCase):
                 mock.patch.object(self.root, "destroy") as destroy:
             self.app._on_close()
             destroy.assert_not_called()           # waits for the extractor instead of blocking
-            self.app.proc.poll.return_value = 0
+            self.app.proc = None                  # what _on_proc_exit does once the last line is handled
             self.app._close_when_stopped(float("inf"))
             destroy.assert_called_once()
-        self.app.proc = None
+
+    def test_the_window_waits_for_the_exit_to_be_handled_not_just_for_the_process_to_end(self):
+        self.app.proc = mock.Mock()
+        self.app.proc.poll.return_value = 130         # the extractor is gone, but its last line is still queued
+        with mock.patch.object(self.root, "destroy") as destroy:
+            self.app._close_when_stopped(float("inf"))
+            destroy.assert_not_called()               # _on_proc_exit has not recorded the run yet
+            self.app.proc = None                      # and now it has
+            self.app._close_when_stopped(float("inf"))
+            destroy.assert_called_once()
 
     def test_closing_asks_once_and_marks_the_coming_exit_as_a_stop(self):
         self.app.proc = mock.Mock()
@@ -822,10 +831,9 @@ class CloseTests(AppCase):
         self.assertTrue(self.app._stop_requested)     # so the exit counts as a stop, and its stats are kept
         self.app.proc = None
 
-    def test_an_extractor_still_running_at_the_deadline_is_killed_before_the_lock_is_let_go(self):
+    def test_an_extractor_still_there_at_the_deadline_is_killed_before_the_lock_is_let_go(self):
         order = []
-        self.app.proc = mock.Mock()
-        self.app.proc.poll.return_value = None        # it never stops
+        self.app.proc = mock.Mock()                   # its exit is never handled
         with mock.patch.object(grave_ui.App, "_atexit_kill", lambda app: order.append("kill")), \
                 mock.patch.object(grave_ui.App, "_release_lock", lambda app: order.append("release")), \
                 mock.patch.object(self.root, "destroy", lambda: order.append("destroy")):
@@ -850,3 +858,37 @@ class CloseTests(AppCase):
         for name, dialog in self.dialogs.items():
             with self.subTest(dialog=name):
                 dialog.assert_not_called()
+
+    def test_closing_during_a_run_closes_once_the_stopped_run_is_recorded_and_says_nothing(self):
+        self.app._reset_run_state()
+        self.app._run_model, self.app._run_effort = "claude-sonnet-5", "high"
+        self.app.proc = mock.Mock()
+        self.app.proc.poll.return_value = None
+        with mock.patch.object(grave_ui.App, "_terminate_run"), \
+                mock.patch.object(self.root, "destroy") as destroy:
+            self.app._on_close()                      # the user confirms; the stop is under way
+            for line in ("[1/3] Processing a.jpg ...", "[1/3] OK: a.jpg (1 record) — $0.2500 (total: $0.25)",
+                         "[2/3] Processing b.jpg ..."):
+                self.app._handle_line("stdout", line + "\n")
+            self.app._on_proc_exit(130)               # the extractor's last line is handled
+            self.app._close_when_stopped(float("inf"))
+        destroy.assert_called_once()
+        stats = json.loads(self.settings_path.read_text(encoding="utf-8"))["stats"]
+        self.assertEqual(stats["claude-sonnet-5|high"]["n"], 1)
+        self.dialogs["askyesno"].assert_called_once()  # only the "Izaći i zaustaviti obradu?" question
+        for name in ("showinfo", "showwarning", "showerror", "askyesnocancel"):
+            with self.subTest(dialog=name):
+                self.dialogs[name].assert_not_called()
+        self.app._draw_attention.assert_not_called()
+
+    def test_closing_switches_stop_off_and_a_stop_after_that_starts_nothing(self):
+        self.app._set_running(True)                   # as during a run: Stop is on
+        self.app.proc = mock.Mock()
+        self.app.proc.poll.return_value = None
+        with mock.patch.object(grave_ui.threading, "Thread") as thread, \
+                mock.patch.object(self.root, "destroy"):
+            self.app._on_close()
+            self.assertEqual(str(self.app.btn_stop.cget("state")), "disabled")
+            self.app._on_stop()                       # a click that was already on its way
+        thread.assert_called_once()                   # the stopper _on_close started, and no second one
+        self.app.proc = None

@@ -719,7 +719,7 @@ class App:
         ).start()
 
     def _on_stop(self):
-        if not self.proc:
+        if not self.proc or self._stop_requested:
             return
         self._append_log("[zaustavljanje…]\n", "info")
         self._stop_requested = True
@@ -1086,6 +1086,7 @@ class App:
             # seconds (up to ~18 s on Windows), and a frozen window looks like a crash.
             self._closing = True
             self._stop_requested = True
+            self.btn_stop.configure(state="disabled")
             self.status_var.set("Zaustavljam obradu…")
             threading.Thread(target=self._terminate_run, daemon=True).start()
             self._close_when_stopped(time.monotonic() + 20)
@@ -1094,11 +1095,12 @@ class App:
         self.root.destroy()
 
     def _close_when_stopped(self, deadline: float):
-        if self.proc is not None and self.proc.poll() is None:
+        # _on_proc_exit clears self.proc once the extractor's last line is handled (stats saved).
+        if self.proc is not None:
             if time.monotonic() <= deadline:
                 self.root.after(100, lambda: self._close_when_stopped(deadline))
                 return
-            self._atexit_kill()     # still running at the deadline: kill it before letting go of the lock
+            self._atexit_kill()     # still there at the deadline: kill it before letting go of the lock
         self._release_lock()
         self.root.destroy()
 
