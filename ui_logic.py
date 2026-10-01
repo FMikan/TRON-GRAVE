@@ -165,9 +165,8 @@ def classify_exit(rc: int, stop_requested: bool, saw_done: bool, is_dry: bool) -
     Stop click) or "failed"."""
     # Windows has no signal exit codes -- a killed child reports 1 -- so a Stop click is the
     # only reliable sign a non-zero exit was deliberate. The Done line outranks it, whatever
-    # code the kill left (1 from taskkill on the one-file build's bootloader, which outlives
-    # the extractor; 130 from a SIGINT just before exit): Stop clicked after the last photo
-    # did not stop anything.
+    # code the kill left (1 from taskkill on Windows, 130 from a SIGINT just before exit):
+    # Stop clicked after the last photo did not stop anything.
     if stop_requested:
         return "done" if saw_done else "stopped"
     # Exit code 2 means "finished with issues", but argparse and the CPython launcher also
@@ -218,7 +217,8 @@ FATAL_EXPLANATIONS = {
     "api-402": "Problem s naplatom — provjerite plaćanje i stanje računa na console.anthropic.com.",
     "api-403": "Ovaj API ključ nema pristup odabranom modelu.",
     "api-404": "Odabrani model ne postoji.",
-    "spend-cap": "Dosegnut je mjesečni limit potrošnje za API.",
+    "spend-cap": "Dosegnut je mjesečni limit potrošnje za API (ili je API privremeno odbio zahtjev "
+                 "zbog ograničenja brzine — pričekajte minutu pa kliknite Pokreni → Nastavi).",
     "api-down": "API tri puta zaredom nije uspio. Provjerite internetsku vezu, stanje računa i limite potrošnje.",
     "csv-locked": "output.csv je zaključan — zatvorite ga (npr. u Excelu).",
     "resume-refused": "Nastavak nije moguć za ovu izlaznu mapu.",

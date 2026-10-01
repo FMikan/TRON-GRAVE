@@ -43,7 +43,7 @@ def parse_args() -> argparse.Namespace:
                         help=f"Claude model (default: CLAUDE_MODEL env, else {DEFAULT_MODEL})")
     parser.add_argument("--effort", default=None,
                         choices=["low", "medium", "high", "xhigh", "max"],
-                        help="Reasoning/effort level (output_config.effort). Omit for the model default (high).")
+                        help="Reasoning/effort level (output_config.effort). Omit for the model's own default.")
     parser.add_argument("--resume", action="store_true",
                         help="Skip images listed in the output folder's .processed file and append instead of overwriting")
     parser.add_argument("--dry-run", action="store_true",
