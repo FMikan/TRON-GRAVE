@@ -87,7 +87,7 @@ def resume_problem(output_dir: Path) -> str | None:
 
     'old-format'   output.csv has other columns (written by an older version)
     'no-processed' output.csv has rows but there is no .processed file
-    'missing-csv'  .processed lists images but output.csv is gone
+    'missing-csv'  .processed lists images but output.csv is gone or has no rows
     'unreadable'   output.csv could not be parsed
     'not-utf8'     output.csv is no longer UTF-8 (re-saved as ANSI by Excel or an editor)
     """
@@ -101,6 +101,8 @@ def resume_problem(output_dir: Path) -> str | None:
         return 'missing-csv' if processed else None
     if header != CSV_COLUMNS:
         return 'old-format'
+    if processed and not rows:
+        return 'missing-csv'   # the rows of the processed photos are gone
     if rows and not (output_dir / PROCESSED_FILE).exists():
         return 'no-processed'
     # Last, so an Excel re-save in a ';' locale keeps its 'old-format' reason (other columns).

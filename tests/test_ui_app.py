@@ -358,6 +358,13 @@ class ExistingOutputTests(RunCase):
         self.assertEqual(self.launched, [])
         self.assertFalse(self.lock().exists())
 
+    def test_a_header_only_csv_with_processed_photos_blocks_nastavi(self):
+        self.make_output()
+        init_csv(self.out / "output.csv")          # the rows were deleted by hand
+        with mock.patch.object(grave_ui.App, "_ask_existing_output", return_value=None) as ask:
+            self.app._on_start()
+        self.assertIn("prazan", ask.call_args[0][4])
+
     def test_the_dialog_greys_out_nastavi_when_blocked(self):
         win, choice = self.app._build_existing_output_dialog(Path("x/output.csv"), 3, 1, 2, "razlog")
         self.assertEqual(str(win.btn_resume.cget("state")), "disabled")

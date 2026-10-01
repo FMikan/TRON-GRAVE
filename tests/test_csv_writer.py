@@ -76,6 +76,11 @@ class ResumeProblemTests(CsvCase):
         (self.tmp / ".processed").write_text("a.jpg\n", encoding="utf-8")
         self.assertEqual(resume_problem(self.tmp), "missing-csv")
 
+    def test_a_header_only_csv_with_a_processed_list_is_refused(self):
+        init_csv(self.csv)
+        (self.tmp / ".processed").write_text("a.jpg\n", encoding="utf-8")
+        self.assertEqual(resume_problem(self.tmp), "missing-csv")
+
     def test_an_ansi_resave_with_the_right_header_is_refused(self):
         self.csv.write_bytes((",".join(CSV_COLUMNS) + "\r\n1,Mišo,Čupić,1920,1999,,p_1_x.jpg\r\n").encode("cp1250"))
         (self.tmp / ".processed").write_text("p_1_x.jpg\n", encoding="utf-8")

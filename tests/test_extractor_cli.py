@@ -224,6 +224,7 @@ class ResumeTests(CliCase):
             "old-format": ("ID,Name,Surname,Year of Birth,Year of Death,Notes\n1,A,B,,,\n", None),
             "no-processed": (",".join(CSV_COLUMNS) + "\n1,A,B,,,,p_1_x.jpg\n", None),
             "missing-csv": (None, "p_1_x.jpg\n"),
+            "missing-csv-empty": (",".join(CSV_COLUMNS) + "\n", "p_1_x.jpg\n"),
             "not-utf8": ((",".join(CSV_COLUMNS) + "\r\n1,Mišo,Čupić,1920,1999,,p_1_x.jpg\r\n").encode("cp1250"),
                          "p_1_x.jpg\n"),
         }

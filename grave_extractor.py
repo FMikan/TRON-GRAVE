@@ -87,7 +87,7 @@ _RESUME_REFUSALS = {
                   "the old file first if you need it.",
     "no-processed": "output.csv has rows but .processed is missing, so resuming would re-send "
                     "(and re-pay for) every image. Start a fresh run instead.",
-    "missing-csv": ".processed lists finished images but output.csv is missing. Restore "
+    "missing-csv": ".processed lists finished images but output.csv is missing or empty. Restore "
                    "output.csv, or delete .processed to start over.",
     "unreadable": "output.csv can't be read, so this run can't be resumed.",
     "not-utf8": "output.csv is no longer UTF-8 (re-saved from Excel or an editor as ANSI), so this "
