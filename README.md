@@ -272,7 +272,9 @@ Options:
                      output.csv. Refuses (exit 1, error: [resume-refused]) when that would
                      re-send finished photos: an output.csv with other columns (from an older
                      version, or re-saved from Excel), output.csv rows without .processed, or
-                     .processed without output.csv; an unreadable output.csv is refused too.
+                     .processed without output.csv (or with an output.csv emptied to its
+                     header); an unreadable output.csv, or one that is no longer UTF-8
+                     (re-saved as ANSI by Excel or an editor), is refused too.
                      With --dry-run, lists only the photos that would run.
   --verbose          Show detailed per-image progress
   --dry-run          List discovered images without making any API calls
