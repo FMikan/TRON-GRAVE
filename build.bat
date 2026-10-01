@@ -31,9 +31,21 @@ if not defined PY (
 )
 echo Using Python: %PY%
 %PY% --version || goto :fail
+%PY% -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" || (
+    echo ERROR: building the exe needs Python 3.11 or newer.
+    echo Install it from https://www.python.org/downloads/ and run this again.
+    goto :fail
+)
 
 REM --- create / reuse an isolated build virtualenv ----------------------------
 set "VENV=.build-venv"
+REM A venv whose base Python was upgraded or removed no longer runs: rebuild it.
+if exist "%VENV%\Scripts\python.exe" (
+    "%VENV%\Scripts\python.exe" -c "" >nul 2>&1 || (
+        echo The build virtualenv is broken ^(its Python was upgraded or removed^); recreating it ...
+        rmdir /s /q "%VENV%"
+    )
+)
 if not exist "%VENV%\Scripts\python.exe" (
     echo Creating build virtualenv in "%VENV%" ...
     %PY% -m venv "%VENV%" || goto :fail
@@ -42,7 +54,8 @@ set "VPY=%VENV%\Scripts\python.exe"
 
 echo Installing dependencies and PyInstaller ...
 "%VPY%" -m pip install --upgrade pip                    || goto :fail
-"%VPY%" -m pip install -r requirements.txt pyinstaller  || goto :fail
+REM PyInstaller 6.9+ runs the extractor the GUI spawns as a worker of its own unpacked folder; Stop relies on it.
+"%VPY%" -m pip install -r requirements.txt "pyinstaller>=6.9"  || goto :fail
 
 REM --- build the one-file exe -------------------------------------------------
 echo(
