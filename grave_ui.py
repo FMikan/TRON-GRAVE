@@ -757,12 +757,16 @@ class App:
                 # One-file build: proc is the bootloader and its child is the Python process
                 # doing the work. Ending only the child lets the bootloader delete its _MEI temp
                 # folder and exit with our code 130; killing both leaves the folder behind.
-                for pid in _windows_child_pids(proc.pid):
-                    _windows_terminate(pid, 130)
-                for _ in range(50):
-                    if proc.poll() is not None:
-                        return
-                    time.sleep(0.1)
+                # Any failure here falls through to the taskkill fallback below.
+                try:
+                    for pid in _windows_child_pids(proc.pid):
+                        _windows_terminate(pid, 130)
+                    for _ in range(50):
+                        if proc.poll() is not None:
+                            return
+                        time.sleep(0.1)
+                except Exception:
+                    pass
             # In the one-file PyInstaller build the process we spawned is the bootloader,
             # not the Python process doing the work -- terminating it alone can leave the
             # extractor running detached, still making paid API calls with no window to
@@ -1149,8 +1153,11 @@ class App:
             try:
                 if sys.platform == "win32":
                     # One-file build: the bootloader's child makes the paid calls; end it too.
-                    for pid in _windows_child_pids(self.proc.pid):
-                        _windows_terminate(pid, 130)
+                    try:
+                        for pid in _windows_child_pids(self.proc.pid):
+                            _windows_terminate(pid, 130)
+                    except Exception:
+                        pass            # whatever failed, the bootloader is still killed
                     self.proc.kill()
                 elif self.pgid is not None:
                     os.killpg(self.pgid, signal.SIGKILL)
