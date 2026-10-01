@@ -11,7 +11,7 @@ Designed for digitizing Croatian cemetery records, with full support for Croatia
 ## Features
 
 - **AI-powered OCR** — reads tombstone inscriptions using Claude Vision (Anthropic API)
-- **Model selection** — pick Claude **Sonnet 5** (cheapest, default), Sonnet 5.5, Opus 5, Opus 5.5, Fable 5 or Fable 5.1 from the GUI dropdown, or any model that supports structured outputs via `--model`
+- **Model selection** — pick Claude **Sonnet 5** (the default), Sonnet 5.5, Opus 5, Opus 5.5, Fable 5 or Fable 5.1 from the GUI dropdown, or any model that supports structured outputs via `--model`
 - **Effort control** — pick how hard the model works per image from the **Napor** dropdown (*nizak*, *srednji*, *visok*, *vrlo visok*, *maksimalan*) or with `--effort` (`low` → `max`); the choices adapt to the selected model
 - **Multi-person tombstones** — extracts records for each person on a single stone
 - **Multi-marker graves** — reads *all* plaques, headstones and crosses that belong to one grave, instead of stopping at the first one. Markers count as one grave only when they share a physical structure (common frame, border, curb, foundation or base, or are touching); a shared surname or carving style is corroborating evidence but never sufficient on its own, since whole rows of same-surname family graves are common. Ambiguous neighbours are flagged for manual review rather than guessed
@@ -78,7 +78,7 @@ to look when reviewing results. Typical notes:
 | `provjeri: možda više oznaka` | Nearby plaques/crosses might belong to the same grave; the model left them out to be safe — check for missed people | Yes — **PARTIAL** |
 | the model's own sentence, e.g. `natpis djelomično oštećen` | The model reported a problem with the photo | Yes — **PARTIAL** (**FAILED** if it read nothing) |
 | `sve nečitko`, `nema podataka` | Nothing could be extracted | Yes — **FAILED** |
-| `odgovor prekinut` | The model's reply hit the token ceiling before it finished; the record may be incomplete | Yes — **FAILED** |
+| `odgovor prekinut` | The model's reply hit the token ceiling before it finished; nothing from it is used (the call is billed, the photo counts as processed and goes to `byhand/`) | Yes — **FAILED** |
 | `odbijeno` | The model declined to answer | Yes — **FAILED** |
 | `neispravan odgovor` | The model's answer was not valid JSON | Yes — **FAILED** |
 | `neočekivana greška` | An unexpected error on this photo; the run carried on with the next one | Yes — **FAILED** |
@@ -147,9 +147,11 @@ These are only for the *before-you-start* estimate. Once a run is going, the sta
 end-of-run summary show the **real** cost, computed from each API response's actual token usage
 (including prompt-cache discounts) — not an estimate.
 
-All six offered models accept all five **effort** levels (Opus 5.5's own default is medium; the GUI
-always sends your choice). Higher levels (`high` → `xhigh` → `max`) make the model reason harder
-per image at higher token cost; drop to `low`/`medium` for cheaper, faster runs.
+All six offered models accept all five **effort** levels. The GUI always sends the level you pick in
+**Napor** (**Ponovi byhand/** raises a lower one to `high`); the CLI sends none unless you pass
+`--effort`, and the model then uses its own default. Higher levels (`high` → `xhigh` → `max`) make
+the model reason harder per image at higher token cost; drop to `low`/`medium` for cheaper, faster
+runs.
 
 ---
 
