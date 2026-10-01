@@ -9,6 +9,11 @@ import httpx
 from extractor import image_processor as ip
 from tests.helpers import FakeClient, MidStream, answer, api_error, jpeg_bytes, message, record
 
+# Sonnet 5.5, Opus 5.5 and the Fable models decline a prompt that asks them to write out their
+# reasoning; Sonnet 5, Opus 5 and the 4.x models keep the scratchpad. Any other id gets the lean request.
+LEAN_MODELS = ("claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5", "claude-fable-5-1", "claude-future-9")
+FULL_MODELS = ("claude-sonnet-5", "claude-opus-5", "claude-sonnet-4-6", "claude-opus-4-8")
+
 
 class ProcessImageCase(unittest.TestCase):
     def setUp(self):
@@ -26,8 +31,13 @@ class ProcessImageCase(unittest.TestCase):
 
 
 class RequestShapeTests(ProcessImageCase):
+    def request_for(self, model):
+        """The kwargs of the one streaming call process_image makes for `model`."""
+        _, client = self.run_image(message(answer(record())), model=model)
+        return client.calls[0]
+
     def test_uses_structured_output_not_a_forced_tool(self):
-        _, client = self.run_image(message(answer(record())))
+        _, client = self.run_image(message(answer(record())), model="claude-sonnet-5")
         kwargs = client.calls[0]
         self.assertNotIn("tools", kwargs)
         self.assertNotIn("tool_choice", kwargs)
@@ -48,6 +58,55 @@ class RequestShapeTests(ProcessImageCase):
                 for value in node:
                     walk(value)
         walk(ip.RESULT_SCHEMA)
+        walk(ip.RESULT_SCHEMA_LEAN)
+
+    def test_models_that_decline_written_reasoning_get_the_lean_request(self):
+        for model in LEAN_MODELS:
+            with self.subTest(model=model):
+                kwargs = self.request_for(model)
+                schema = kwargs["output_config"]["format"]["schema"]
+                system = kwargs["system"][0]
+                self.assertNotIn("reasoning", schema["properties"])
+                self.assertNotIn("reasoning", schema["required"])
+                self.assertIn("raw_text", schema["required"])   # the transcription stays
+                self.assertNotIn('2. "reasoning":', system["text"])
+                self.assertNotIn("BOTH scratchpad fields", system["text"])
+                for kept in ('1. "raw_text":', "Your task:", "Worked examples:"):
+                    self.assertIn(kept, system["text"])
+                self.assertEqual(system["cache_control"], {"type": "ephemeral"})
+                self.assertIs(schema, ip.RESULT_SCHEMA_LEAN)
+                self.assertEqual(system["text"], ip.SYSTEM_PROMPT_LEAN)
+
+    def test_the_other_models_keep_the_written_reasoning(self):
+        for model in FULL_MODELS:
+            with self.subTest(model=model):
+                kwargs = self.request_for(model)
+                schema = kwargs["output_config"]["format"]["schema"]
+                system = kwargs["system"][0]
+                self.assertIn("reasoning", schema["properties"])
+                self.assertIn("reasoning", schema["required"])
+                self.assertIn('2. "reasoning":', system["text"])
+                self.assertEqual(system["cache_control"], {"type": "ephemeral"})
+                self.assertIs(schema, ip.RESULT_SCHEMA)
+                self.assertEqual(system["text"], ip.SYSTEM_PROMPT)
+
+    def test_the_lean_prompt_is_the_full_prompt_without_step_2(self):
+        full, lean = ip.SYSTEM_PROMPT.splitlines(), ip.SYSTEM_PROMPT_LEAN.splitlines()
+        start = next(i for i, line in enumerate(full) if line.startswith('2. "reasoning":'))
+        end = next(i for i, line in enumerate(full) if line.startswith("Then fill the structured fields below"))
+        kept = full[:start] + full[end:]
+        # Every line outside step 2 survives in order; only the two lines that pointed at it changed.
+        self.assertEqual(len(lean), len(kept))
+        self.assertEqual([new for old, new in zip(kept, lean) if new != old], [
+            "Work in this exact order, filling the scratchpad field before any structured field:",
+            "Then fill the structured fields below from your transcription.",
+        ])
+
+    def test_a_model_always_gets_the_identical_system_blocks(self):
+        # Prompt caching matches a byte-exact prefix, so every call must send the very same blocks.
+        for model in ("claude-sonnet-5", "claude-sonnet-5-5"):
+            with self.subTest(model=model):
+                self.assertIs(self.request_for(model)["system"], self.request_for(model)["system"])
 
     def test_max_tokens_grows_for_the_top_effort_levels(self):
         for effort, expected in (("low", 16000), ("high", 16000), ("xhigh", 64000), ("max", 64000), (None, 16000)):

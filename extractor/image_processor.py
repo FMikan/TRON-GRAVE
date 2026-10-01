@@ -1,4 +1,5 @@
 import base64
+import copy
 import datetime
 import io
 import json
@@ -205,6 +206,17 @@ Worked examples:
 - Text is carved in Cyrillic, e.g. "ХОРВАТ" for the surname: transliterate to Croatian Latin script
   as "Horvat" before writing the output field; do not leave any field in Cyrillic characters."""
 
+# The prompt for the models that decline to write out their reasoning (see _writes_reasoning): the
+# same text without step 2, and with the two lines that pointed at it reworded. index() raises at
+# import if a later edit of the prompt loses either end of step 2; the tests pin the wording changes.
+_STEP_2_START = SYSTEM_PROMPT.index('2. "reasoning":')
+_STEP_2_END = SYSTEM_PROMPT.index("Then fill the structured fields below")
+SYSTEM_PROMPT_LEAN = (
+    (SYSTEM_PROMPT[:_STEP_2_START] + SYSTEM_PROMPT[_STEP_2_END:])
+    .replace("filling BOTH scratchpad fields", "filling the scratchpad field")
+    .replace("from your reasoning.", "from your transcription.")
+)
+
 
 _NULLABLE_STRING = {"anyOf": [{"type": "string"}, {"type": "null"}]}
 _NULLABLE_YEAR = {"anyOf": [{"type": "integer"}, {"type": "null"}]}
@@ -227,6 +239,8 @@ RESULT_SCHEMA = {
         },
         # Internal scratchpad only (not written to the CSV): forces the model to reason through
         # grouping, name normalisation and any inference in words before it fills `records`.
+        # Sent only to the models that accept it (see _writes_reasoning); the rest get
+        # RESULT_SCHEMA_LEAN, which leaves it out.
         "reasoning": {
             "type": "string",
             "description": "Written after raw_text and before the structured fields, and NOT saved "
@@ -274,10 +288,18 @@ RESULT_SCHEMA = {
     "additionalProperties": False,
 }
 
+# The same answer without the "reasoning" scratchpad, for the models that decline it.
+RESULT_SCHEMA_LEAN = copy.deepcopy(RESULT_SCHEMA)
+del RESULT_SCHEMA_LEAN["properties"]["reasoning"]
+RESULT_SCHEMA_LEAN["required"].remove("reasoning")
+
 # Cache the system prompt (stable across every image in a run). Below the model's minimum
 # cacheable prefix this silently has no effect and costs nothing extra. Minimums: 1024 tok
-# on Sonnet 5, 512 on the other offered models -- this prompt runs ~4k tokens.
+# on Sonnet 5, 512 on the other offered models -- this prompt runs ~4k tokens. The full prompt,
+# with its written-reasoning step, goes only to the models that accept it (see _writes_reasoning);
+# the rest get the lean one. Module-level constants, so every call of a model sends the same bytes.
 _SYSTEM_BLOCKS = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
+_SYSTEM_BLOCKS_LEAN = [{"type": "text", "text": SYSTEM_PROMPT_LEAN, "cache_control": {"type": "ephemeral"}}]
 
 _RETRY_DELAYS = [2, 4, 8]
 # Status codes that doom the whole run (bad key, billing, no access, unknown model) rather
@@ -479,13 +501,32 @@ def _max_tokens(effort: str | None) -> int:
     return 64000 if effort in ("xhigh", "max") else 16000
 
 
+def _writes_reasoning(model: str) -> bool:
+    """Whether the request may ask for the written "reasoning" scratchpad.
+
+    Sonnet 5.5, Opus 5.5 and the Fable models decline a prompt that asks the model to write out its
+    reasoning (refusal category "reasoning_extraction"), and a fallback model does not retry that
+    decline. Sonnet 5, Opus 5 and the 4.x models predate that check and keep the scratchpad; any
+    other model gets the lean request, which every model accepts.
+    """
+    return model in ("claude-sonnet-5", "claude-opus-5") or "-4-" in model
+
+
+def _request_parts(model: str) -> tuple[list, dict]:
+    """(system blocks, answer schema) for this model's request."""
+    if _writes_reasoning(model):
+        return _SYSTEM_BLOCKS, RESULT_SCHEMA
+    return _SYSTEM_BLOCKS_LEAN, RESULT_SCHEMA_LEAN
+
+
 def _call_api(client, model: str, mime: str, b64: str, effort: str | None = None):
     # temperature is only accepted on the Sonnet 4.x family. Sonnet 5, Opus 4.7/4.8,
     # Opus 5 and Fable 5 reject it with 400 "temperature is deprecated for this model".
     params: dict = {"temperature": 0} if "sonnet-4" in model else {}
+    system, schema = _request_parts(model)
     # Structured output, not a forced tool call: Sonnet 5.5, Opus 5.5 and Fable 5.1 reject
     # tool_choice "tool" with a 400. The answer arrives as one JSON text block.
-    output_config: dict = {"format": {"type": "json_schema", "schema": RESULT_SCHEMA}}
+    output_config: dict = {"format": {"type": "json_schema", "schema": schema}}
     if effort:
         output_config["effort"] = effort
     # Streamed, so the larger max_tokens ceilings stay clear of the SDK's timeout guard for
@@ -493,7 +534,7 @@ def _call_api(client, model: str, mime: str, b64: str, effort: str | None = None
     with client.messages.stream(
         model=model,
         max_tokens=_max_tokens(effort),
-        system=_SYSTEM_BLOCKS,
+        system=system,
         output_config=output_config,
         **params,
         messages=[{
