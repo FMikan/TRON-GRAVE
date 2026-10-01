@@ -308,3 +308,16 @@ def tally_review_notes(csv_path: Path, flagged_files: set[str], limit: int = 5) 
             if part:
                 counts[part] = counts.get(part, 0) + 1
     return sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:limit]
+
+
+# ---- Windows ---------------------------------------------------------------------------
+
+def child_pids(entries, parent: int) -> list[int]:
+    """PIDs whose parent is `parent`, from (pid, parent_pid) pairs of a process snapshot."""
+    return [pid for pid, ppid in entries if ppid == parent and pid != parent]
+
+
+def scaled_geometry(width: int, height: int, scale: float, screen_w: int, screen_h: int) -> tuple[int, int]:
+    """Window size for a DPI scale factor, never more than 90% of the screen."""
+    return (min(round(width * scale), int(screen_w * 0.9)),
+            min(round(height * scale), int(screen_h * 0.9)))

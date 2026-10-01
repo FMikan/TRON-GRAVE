@@ -1,3 +1,4 @@
+import ctypes
 import json
 import os
 import time
@@ -11,7 +12,7 @@ import grave_ui
 import ui_logic
 from extractor.csv_writer import append_rows, init_csv, init_processed, mark_processed
 from tests.helpers import jpeg_bytes
-from tests.ui_harness import REAL_LAUNCH_SUBPROCESS, REAL_SHOW_SUMMARY, AppCase
+from tests.ui_harness import REAL_DRAW_ATTENTION, REAL_LAUNCH_SUBPROCESS, REAL_SHOW_SUMMARY, AppCase
 
 
 class LabelTests(AppCase):
@@ -1015,3 +1016,145 @@ class CloseTests(AppCase):
             self.app._on_close()
         destroy.assert_called_once()
         self.dialogs["askyesno"].assert_not_called()
+
+
+class WindowsStopTests(AppCase):
+    def test_the_frozen_build_stops_the_child_first(self):
+        proc = mock.Mock(pid=4321)
+        proc.poll.side_effect = [None, None, 0]
+        self.app.proc, self.app.pgid = proc, 4321
+        with mock.patch.object(grave_ui.sys, "platform", "win32"), \
+                mock.patch.object(grave_ui.sys, "frozen", True, create=True), \
+                mock.patch.object(grave_ui, "_windows_child_pids", return_value=[999]), \
+                mock.patch.object(grave_ui, "_windows_terminate") as terminate, \
+                mock.patch.object(grave_ui.subprocess, "run") as taskkill, \
+                mock.patch("time.sleep"):
+            self.app._terminate_run()
+        terminate.assert_called_once_with(999, 130)
+        taskkill.assert_not_called()
+        self.app.proc = None
+
+    def test_the_bootloader_is_taskkilled_if_it_outlives_its_child(self):
+        order = []
+        proc = mock.Mock(pid=4321)
+        proc.poll.return_value = None                 # still there after the child was ended
+        self.app.proc, self.app.pgid = proc, 4321
+        with mock.patch.object(grave_ui.sys, "platform", "win32"), \
+                mock.patch.object(grave_ui.sys, "frozen", True, create=True), \
+                mock.patch.object(grave_ui.subprocess, "CREATE_NO_WINDOW", 0, create=True), \
+                mock.patch.object(grave_ui, "_windows_child_pids", return_value=[999]), \
+                mock.patch.object(grave_ui, "_windows_terminate", lambda pid, code: order.append("child")), \
+                mock.patch.object(grave_ui.subprocess, "run", lambda *args, **kwargs: order.append("taskkill")), \
+                mock.patch("time.sleep"):
+            self.app._terminate_run()
+        self.assertEqual(order, ["child", "taskkill"])
+        self.app.proc = None
+
+    def test_a_source_run_is_stopped_by_taskkill_without_looking_for_children(self):
+        proc = mock.Mock(pid=4321)
+        proc.poll.side_effect = [None, 0]             # gone once taskkill has run
+        self.app.proc, self.app.pgid = proc, 4321
+        with mock.patch.object(grave_ui.sys, "platform", "win32"), \
+                mock.patch.object(grave_ui.sys, "frozen", False, create=True), \
+                mock.patch.object(grave_ui.subprocess, "CREATE_NO_WINDOW", 0, create=True), \
+                mock.patch.object(grave_ui, "_windows_child_pids") as child_pids, \
+                mock.patch.object(grave_ui.subprocess, "run") as taskkill:
+            self.app._terminate_run()
+        child_pids.assert_not_called()                # proc is the worker itself: nothing to wait 5 s for
+        taskkill.assert_called_once()
+        self.app.proc = None
+
+    def test_the_exit_kill_ends_the_bootloaders_child_before_it_and_lets_go_of_the_lock(self):
+        lock = self.tmp / ".tron-grave.lock"
+        lock.write_text("token", encoding="utf-8")
+        self.app.lock_path, self.app.lock_token = lock, "token"
+        order = []
+        proc = mock.Mock(pid=4321)
+        proc.poll.return_value = None
+        proc.kill.side_effect = lambda: order.append("bootloader")
+        self.app.proc = proc
+        with mock.patch.object(grave_ui.sys, "platform", "win32"), \
+                mock.patch.object(grave_ui, "_windows_child_pids", return_value=[999]) as child_pids, \
+                mock.patch.object(grave_ui, "_windows_terminate", lambda pid, code: order.append(("child", pid, code))):
+            self.app._atexit_kill()
+        child_pids.assert_called_once_with(4321)
+        self.assertEqual(order, [("child", 999, 130), "bootloader"])
+        self.assertFalse(lock.exists())
+        self.app.proc = None
+
+    def test_the_window_is_not_scaled_off_windows(self):
+        self.assertEqual(self.app._dpi_scale(), 1.0)
+
+
+class WindowsDisplayTests(AppCase):
+    def test_the_window_scales_with_a_windows_display_but_never_shrinks(self):
+        for dpi, scale in ((96.0, 1.0), (144.0, 1.5), (192.0, 2.0), (72.0, 1.0)):
+            with self.subTest(dpi=dpi), \
+                    mock.patch.object(grave_ui.sys, "platform", "win32"), \
+                    mock.patch.object(self.root, "winfo_fpixels", return_value=dpi) as fpixels:
+                self.assertEqual(self.app._dpi_scale(), scale)
+                fpixels.assert_called_once_with("1i")
+        with mock.patch.object(grave_ui.sys, "platform", "win32"), \
+                mock.patch.object(self.root, "winfo_fpixels", side_effect=tk.TclError):
+            self.assertEqual(self.app._dpi_scale(), 1.0)
+
+    def test_a_dense_display_off_windows_does_not_scale_the_window(self):
+        with mock.patch.object(grave_ui.sys, "platform", "linux"), \
+                mock.patch.object(self.root, "winfo_fpixels", return_value=192.0):
+            self.assertEqual(self.app._dpi_scale(), 1.0)
+
+    def test_the_window_is_sized_for_the_display_and_kept_on_it(self):
+        for scale, screen, size in ((1.5, (3840, 2160), "1770x1050"),      # room to spare: scaled
+                                    (1.5, (1280, 720), "1152x648"),        # no room: kept on screen
+                                    (1.0, (2560, 1440), "1180x700")):
+            with self.subTest(scale=scale, screen=screen):
+                root = tk.Tk()
+                root.withdraw()
+                self.addCleanup(root.destroy)
+                with mock.patch.object(grave_ui.App, "_dpi_scale", return_value=scale), \
+                        mock.patch.object(root, "winfo_screenwidth", return_value=screen[0]), \
+                        mock.patch.object(root, "winfo_screenheight", return_value=screen[1]), \
+                        mock.patch.object(root, "geometry") as geometry:
+                    grave_ui.App(root)
+                geometry.assert_called_once_with(size)
+
+    def test_main_makes_the_process_dpi_aware_before_the_first_window_on_windows_only(self):
+        for platform, expected in (("win32", ["aware", "tk", "app", "tk().mainloop"]),
+                                   ("linux", ["tk", "app", "tk().mainloop"])):
+            with self.subTest(platform=platform):
+                calls = mock.Mock()
+                with mock.patch.object(grave_ui.sys, "platform", platform), \
+                        mock.patch.object(grave_ui, "_enable_dpi_awareness", calls.aware), \
+                        mock.patch.object(grave_ui.tk, "Tk", calls.tk), \
+                        mock.patch.object(grave_ui, "App", calls.app):
+                    grave_ui.main()
+                self.assertEqual([call[0] for call in calls.mock_calls], expected)
+
+    def test_dpi_awareness_asks_for_the_system_setting(self):
+        windll = mock.Mock()
+        with mock.patch.object(ctypes, "windll", windll, create=True):
+            grave_ui._enable_dpi_awareness()
+        windll.shcore.SetProcessDpiAwareness.assert_called_once_with(1)
+        windll.user32.SetProcessDPIAware.assert_not_called()
+
+    def test_dpi_awareness_falls_back_to_the_old_call_and_never_raises(self):
+        for error in (OSError, AttributeError):     # Windows 7 has no shcore.dll; 8.0 has it, without this call
+            with self.subTest(error=error.__name__):
+                windll = mock.Mock()
+                windll.shcore.SetProcessDpiAwareness.side_effect = error
+                with mock.patch.object(ctypes, "windll", windll, create=True):
+                    grave_ui._enable_dpi_awareness()
+                windll.user32.SetProcessDPIAware.assert_called_once_with()
+        with mock.patch.object(ctypes, "windll", mock.Mock(spec=[]), create=True):      # no windll at all
+            grave_ui._enable_dpi_awareness()
+
+
+class AttentionTests(AppCase):
+    def test_a_run_that_ends_flashes_the_taskbar_button(self):
+        with mock.patch.object(grave_ui.sys, "platform", "win32"), \
+                mock.patch.object(grave_ui, "_flash_taskbar") as flash, \
+                mock.patch.object(self.root, "deiconify"), \
+                mock.patch.object(self.root, "lift"), \
+                mock.patch.object(self.root, "bell"):       # the real method, on a root that is never shown
+            REAL_DRAW_ATTENTION(self.app)
+        flash.assert_called_once_with(self.root)

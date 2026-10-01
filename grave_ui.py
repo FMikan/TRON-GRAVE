@@ -35,6 +35,7 @@ LOG_LINE_CAP = 5000
 LOG_TRIM_BATCH = 500
 DRAIN_CAP_PER_TICK = 200
 MAX_LINE_CHARS = 4096
+BASE_WIDTH, BASE_HEIGHT = 1180, 700
 
 
 class App:
@@ -42,8 +43,13 @@ class App:
         self.root = root
         self.root.title(f"TRON-GRAVE {__version__}")
         # Wide enough for the full control row: Start/Stop, the dry-run checkbox, and the three
-        # Open/Retry buttons. At 960 the last button was clipped off-screen.
-        self.root.geometry("1180x700")
+        # Open/Retry buttons. At 960 the last button was clipped off-screen. Scaled for DPI and
+        # kept on screen.
+        width, height = ui_logic.scaled_geometry(
+            BASE_WIDTH, BASE_HEIGHT, self._dpi_scale(),
+            self.root.winfo_screenwidth(), self.root.winfo_screenheight(),
+        )
+        self.root.geometry(f"{width}x{height}")
 
         self.input_var = tk.StringVar()
         self.output_var = tk.StringVar()
@@ -99,6 +105,15 @@ class App:
         # and fonts differ per OS and DPI, so a fixed minimum cut off the last button.
         self.root.update_idletasks()
         self.root.minsize(max(900, self._ctrl.winfo_reqwidth() + 28), 460)
+
+    def _dpi_scale(self) -> float:
+        """How much denser than 96 dpi the screen is (Windows, once DPI-aware); 1.0 elsewhere."""
+        if sys.platform != "win32":
+            return 1.0
+        try:
+            return max(1.0, self.root.winfo_fpixels("1i") / 96)
+        except tk.TclError:
+            return 1.0
 
     # ----- UI construction --------------------------------------------------
 
@@ -738,6 +753,16 @@ class App:
         if not proc or pgid is None or proc.poll() is not None:
             return
         if sys.platform == "win32":
+            if getattr(sys, "frozen", False):
+                # One-file build: proc is the bootloader and its child is the Python process
+                # doing the work. Ending only the child lets the bootloader delete its _MEI temp
+                # folder and exit with our code 130; killing both leaves the folder behind.
+                for pid in _windows_child_pids(proc.pid):
+                    _windows_terminate(pid, 130)
+                for _ in range(50):
+                    if proc.poll() is not None:
+                        return
+                    time.sleep(0.1)
             # In the one-file PyInstaller build the process we spawned is the bootloader,
             # not the Python process doing the work -- terminating it alone can leave the
             # extractor running detached, still making paid API calls with no window to
@@ -1123,6 +1148,9 @@ class App:
         if self.proc and self.proc.poll() is None:
             try:
                 if sys.platform == "win32":
+                    # One-file build: the bootloader's child makes the paid calls; end it too.
+                    for pid in _windows_child_pids(self.proc.pid):
+                        _windows_terminate(pid, 130)
                     self.proc.kill()
                 elif self.pgid is not None:
                     os.killpg(self.pgid, signal.SIGKILL)
@@ -1214,13 +1242,14 @@ class App:
             pass
 
     def _draw_attention(self):
-        """Bring the window back when a run ends, even if it was minimized."""
+        """Bring the window back when a run ends, even if it was minimized, and flash its taskbar button."""
         try:
             self.root.deiconify()
             self.root.lift()
             self.root.bell()
         except tk.TclError:
             pass
+        _flash_taskbar(self.root)
 
     # ----- search bar -------------------------------------------------------
 
@@ -1288,7 +1317,103 @@ class App:
             messagebox.showerror("Ne mogu spremiti postavke", f"Ne mogu pisati u {SETTINGS_PATH}.")
 
 
+def _enable_dpi_awareness():
+    """Render crisply on scaled Windows displays instead of being bitmap-stretched."""
+    try:
+        import ctypes
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)      # system DPI aware (8.1+)
+        except (AttributeError, OSError):
+            ctypes.windll.user32.SetProcessDPIAware()
+    except (AttributeError, OSError):
+        pass
+
+
+def _windows_child_pids(parent_pid: int) -> list[int]:
+    """PIDs of parent_pid's child processes, from a Toolhelp32 snapshot ([] if it fails)."""
+    import ctypes
+    from ctypes import wintypes
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", ctypes.c_wchar * 260),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+    kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x2, 0)         # TH32CS_SNAPPROCESS
+    if not snapshot or snapshot == ctypes.c_void_p(-1).value:   # INVALID_HANDLE_VALUE
+        return []
+    entries = []
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(entry)
+        ok = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+        while ok:
+            entries.append((entry.th32ProcessID, entry.th32ParentProcessID))
+            ok = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snapshot)
+    return ui_logic.child_pids(entries, parent_pid)
+
+
+def _windows_terminate(pid: int, exit_code: int) -> None:
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel32.OpenProcess(0x0001, False, pid)          # PROCESS_TERMINATE
+    if handle:
+        try:
+            kernel32.TerminateProcess(handle, exit_code)
+        finally:
+            kernel32.CloseHandle(handle)
+
+
+def _flash_taskbar(root: tk.Tk) -> None:
+    """Flash the taskbar button until the window gets focus (Windows only)."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class FLASHWINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.UINT), ("hwnd", wintypes.HWND),
+                        ("dwFlags", wintypes.DWORD), ("uCount", wintypes.UINT),
+                        ("dwTimeout", wintypes.DWORD)]
+
+        user32 = ctypes.WinDLL("user32")
+        user32.GetParent.restype = wintypes.HWND
+        user32.GetParent.argtypes = [wintypes.HWND]
+        hwnd = user32.GetParent(root.winfo_id())                 # Tk's frame window
+        info = FLASHWINFO(ctypes.sizeof(FLASHWINFO), hwnd, 0x3 | 0xC, 0, 0)  # FLASHW_ALL|TIMERNOFG
+        user32.FlashWindowEx(ctypes.byref(info))
+    except (AttributeError, OSError, tk.TclError):
+        pass
+
+
 def main():
+    if sys.platform == "win32":
+        _enable_dpi_awareness()     # must happen before Tk creates its first window
     root = tk.Tk()
     App(root)
     root.mainloop()

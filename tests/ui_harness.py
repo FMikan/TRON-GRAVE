@@ -11,6 +11,7 @@ import grave_ui
 
 REAL_SHOW_SUMMARY = grave_ui.App._show_summary_popup
 REAL_LAUNCH_SUBPROCESS = grave_ui.App._launch_subprocess
+REAL_DRAW_ATTENTION = grave_ui.App._draw_attention
 
 
 class AppCase(unittest.TestCase):
