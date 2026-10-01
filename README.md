@@ -11,28 +11,29 @@ Designed for digitizing Croatian cemetery records, with full support for Croatia
 ## Features
 
 - **AI-powered OCR** — reads tombstone inscriptions using Claude Vision (Anthropic API)
-- **Model selection** — choose between **Claude Sonnet 5** (cheapest), **Claude Opus 5** and **Claude Fable 5** from the GUI dropdown, or any model via the `--model` CLI flag
-- **Effort control** — pick how hard the model works per image (`low` → `max`) from the GUI dropdown or `--effort`; the choices adapt to the selected model
+- **Model selection** — pick Claude **Sonnet 5** (cheapest, default), Sonnet 5.5, Opus 5, Opus 5.5, Fable 5 or Fable 5.1 from the GUI dropdown, or any model that supports structured outputs via `--model`
+- **Effort control** — pick how hard the model works per image from the **Napor** dropdown (*nizak*, *srednji*, *visok*, *vrlo visok*, *maksimalan*) or with `--effort` (`low` → `max`); the choices adapt to the selected model
 - **Multi-person tombstones** — extracts records for each person on a single stone
 - **Multi-marker graves** — reads *all* plaques, headstones and crosses that belong to one grave, instead of stopping at the first one. Markers count as one grave only when they share a physical structure (common frame, border, curb, foundation or base, or are touching); a shared surname or carving style is corroborating evidence but never sufficient on its own, since whole rows of same-surname family graves are common. Ambiguous neighbours are flagged for manual review rather than guessed
 - **Conservative extraction** — leaves fields blank rather than guessing uncertain data
 - **Smart year handling** — for both birth and death years, distinguishes a *certain* absence (e.g. person still living, or no birth date inscribed) from an *unreadable* year, so records with a legitimately missing year are passed as **OK** instead of being needlessly flagged for review
-- **Prompt caching** — the shared instructions are cached after the first image and reused for the rest of the run, cutting the per-image system-prompt cost by ~90% for the whole batch. The prompt is well above the cache minimum on all three offered models (1024 tokens on Sonnet 5, 512 on Opus 5 and Fable 5), so this applies whichever you pick
+- **Prompt caching** — the shared instructions are cached after the first image and reused for the rest of the run, cutting the per-image system-prompt cost by ~90% for the whole batch. The prompt is well above the cache minimum on all six offered models (1024 tokens on Sonnet 5, 512 on the other offered models), so this applies whichever you pick
 - **Batch processing** — processes entire folders of images automatically
-- **Smart image compression** — auto-resizes oversized images to fit API requirements
-- **Manual review queue** — copies images needing review to a `byhand/` folder for manual inspection
+- **Photo normalisation** — every photo is fully decoded (truncated files fail cleanly), rotated by its EXIF tag (the API ignores image metadata), shrunk to the 2576 px the model actually uses (so 48–200 MP phone photos work) and sent in its real format; a photo that needs none of that goes out untouched
+- **Manual review queue** — copies images needing review to a `byhand/` folder for manual inspection (emptied when a fresh run starts; photos whose API call failed are not copied — resume retries them)
 - **Notes column** — every edge case (uncertain year, missing field, non-standard filename) is explained inline in the CSV's `Notes` column
-- **Real-time progress & live cost counter** — GUI shows progress bar, ETA, and the *real* running API cost (computed from each response's actual token usage, not an estimate)
-- **End-of-run summary** — a popup with OK/manual/failed counts, the most common review reasons, and total cost, shown as soon as a run finishes
-- **Resume interrupted runs** — check "Nastavi (preskoči obrađene)" to skip images an earlier run already got through and append only the new ones, instead of reprocessing (and re-paying for) everything
-- **Retry byhand with Opus** — after a run finishes, a button lets you re-run just the `byhand/` images through Opus 5 at high effort into a separate `byhand_retry/` folder, without touching the original `output.csv`
-- **Automatic retries** — retries failed API calls with exponential backoff
-- **Settings persistence** — remembers your folders, API key, and chosen model between sessions
-- **Dry-run mode** — preview image discovery without making any API calls
+- **Real-time progress & live cost counter** — GUI shows progress bar, the photo being processed, ETA, and the *real* running API cost (computed from each response's actual token usage, not an estimate)
+- **End-of-run summary** — a popup with OK / for-review / failed counts, the most common review reasons among this run's flagged photos, the total cost, and a button to open the CSV; the window comes back to the front (taskbar flash on Windows)
+- **Resume interrupted runs** — when the output folder already has an output.csv, **Pokreni** asks **Nastavi** (resume) / **Prepiši** (move output.csv and byhand/ aside and start over) / **Odustani**; a resume never re-sends a photo the model already answered
+- **Ponovi byhand/** — re-runs just the `byhand/` photos with Claude Opus 5.5 at high effort, or your selected model/effort if stronger, into `byhand_retry/`; it asks before touching earlier retry results and can be resumed
+- **Automatic retries** — retries failed API calls with exponential backoff; the run stops (and can be resumed later) on a billing error, the monthly spend cap, or three API failures in a row
+- **Settings persistence** — remembers folders, model and effort; the API key is stored only when you click **Spremi**, in an owner-only file (`%APPDATA%\tron-grave` on Windows, `~/Library/Application Support/tron-grave` on macOS, `~/.config/tron-grave` on Linux — or `$XDG_CONFIG_HOME/tron-grave` when that is set)
+- **Dry-run mode** — preview image discovery without making any API calls (**Probni prolaz (samo popis)** in the GUI, `--dry-run` on the CLI)
 - **Croatian & Cyrillic support** — outputs in Croatian with automatic Cyrillic transliteration
+- **Croatian GUI** — every label, dialog and status message
 
 **Supported image formats:** `.jpg`, `.jpeg`, `.png`, `.webp`
-> Note: iPhone HEIC/HEIF photos must be converted to JPG first.
+> Note: iPhone HEIC/HEIF photos must be converted to JPG first (the app reports how many it skipped).
 
 ---
 
@@ -42,16 +43,24 @@ For each processed folder, TRON-GRAVE creates:
 
 **`output.csv`** — UTF-8 with BOM (Excel-compatible)
 ```
-ID,Name,Surname,Year of Birth,Year of Death,Notes
-img001,Ivan,Horvat,1921,1987,
-img002,Marija,Horvat,1925,,bez god. smrti
-img003,Petar,Kovač,1940,,god. smrti nečitka
+ID,Name,Surname,Year of Birth,Year of Death,Notes,File
+305,Ivan,Horvat,1921,1987,,pokojnici-ploca_305_22-07-2026_11-29-39.jpg
+305,Marija,Horvat,1925,,bez god. smrti,pokojnici-ploca_305_22-07-2026_11-29-39.jpg
+306,Petar,Kovač,1940,,god. smrti nečitka,pokojnici-ploca_306_22-07-2026_11-31-02.jpg
 ```
 
 The **`ID`** is the second underscore-separated part of the filename
 (`pokojnici-ploca_305_22-07-2026_11-29-39.jpg` → `305`). A grave photographed more than
 once yields several rows sharing that ID, which is what keeps a grave's markers grouped
-together in the output.
+together in the output. When the name does not fit that pattern, or the ID position holds a
+date/time stamp instead of an ID, the whole filename (without extension) becomes the ID and the
+row gets the `ID iz naziva` note.
+
+**`File`** is the photo a row came from, so every row can be traced to its photo in `byhand/` and
+matched against the retry CSV.
+
+Opening in Excel: the file is comma-separated UTF-8. If Excel puts everything into column A
+(Croatian regional settings expect `;`), open it with **Data → From Text/CSV** and choose *Comma*.
 
 The **`Notes`** column (Croatian) is filled only for edge cases and is the single place
 to look when reviewing results. Typical notes:
@@ -65,19 +74,30 @@ to look when reviewing results. Typical notes:
 | `god. rođ. izvedena` / `god. smrti izvedena` | The year was not legible as carved but was derived with high confidence (e.g. death year minus age at death), so it may be off by ±1 | No — counts as **OK** |
 | `god. smrti nečitka` / `god. rođenja nečitka` | A year may exist but could not be read confidently | Yes — **PARTIAL** |
 | `fali: ime` / `fali: prezime` | Name or surname is illegible | Yes — **PARTIAL** |
+| `provjeri godine` | The birth year is after the death year; both are kept | Yes — **PARTIAL** |
 | `provjeri: možda više oznaka` | Nearby plaques/crosses might belong to the same grave; the model left them out to be safe — check for missed people | Yes — **PARTIAL** |
+| the model's own sentence, e.g. `natpis djelomično oštećen` | The model reported a problem with the photo | Yes — **PARTIAL** (**FAILED** if it read nothing) |
 | `sve nečitko`, `nema podataka` | Nothing could be extracted | Yes — **FAILED** |
 | `odgovor prekinut` | The model's reply hit the token ceiling before it finished; the record may be incomplete | Yes — **FAILED** |
-| `greška API-ja`, `ne mogu otvoriti`, `slika prevelika` | The API call failed, or the file could not be read or compressed to fit | Yes — **FAILED** |
-| `… ID iz naziva` | The ID came from the whole filename stem rather than the expected `<prefix>_<ID>_<rest>` pattern — either the filename did not match it at all, or the ID position held a date/time stamp instead of an ID (`IMG_20240513_142233`, where taking `20240513` would put a whole day's shoot under one ID) | No (appended to any note) |
+| `odbijeno` | The model declined to answer | Yes — **FAILED** |
+| `neispravan odgovor` | The model's answer was not valid JSON | Yes — **FAILED** |
+| `neočekivana greška` | An unexpected error on this photo; the run carried on with the next one | Yes — **FAILED** |
+| `ne mogu otvoriti` | The file could not be read or decoded (truncated, corrupt, a HEIC renamed to .jpg) | Yes — **FAILED** |
+| `greška API-ja` | The API call failed (not billed) | No — resume retries it (**FAILED**) |
+| `… ID iz naziva` | The ID came from the whole filename stem rather than the expected `<prefix>_<ID>_<rest>` pattern — either the filename did not match it at all, or the ID position held a date/time stamp instead of an ID (`IMG_20240513_142233`, `photo_2024-05-13_14-22-33`… — taking `20240513` or `2024-05-13` as the ID would put a whole day's shoot under one ID) | No (appended to any note) |
 
-The notes are kept intentionally terse to minimise token/CSV size while preserving meaning.
+System tags come first and are never shortened; the model's own note comes last, capped at 120 characters.
 
-**`byhand/`** — copies of images flagged for manual review (PARTIAL or FAILED rows above)
+**`byhand/`** — copies of images flagged for manual review (PARTIAL or FAILED rows above, except
+photos whose API call failed — resume retries those)
 
-**`.processed`** — bookkeeping for `--resume`: one image filename per line, for the images
-a run got results out of. Rewritten from scratch by every non-resume run. Delete it and
-`--resume` simply has nothing to skip.
+**`.processed`** — bookkeeping for resume: one filename per line for every photo the model
+answered, whatever the verdict, so resume never pays for it twice. Rewritten by every fresh run.
+If it is missing while output.csv has rows, resume refuses to run rather than re-send everything.
+
+**`byhand_retry/`** — results of **Ponovi byhand/**, with its own `output.csv`, `.processed` and `byhand/`
+
+**`output.<time>.bak.csv`**, **`byhand.<time>.bak/`** — what **Prepiši** set aside (`<time>` is `YYYYMMDD-HHMMSS`)
 
 > There is no longer a separate `errors.txt`; all review information now lives in the `Notes` column.
 
@@ -103,23 +123,33 @@ TRON-GRAVE uses the **Anthropic Claude API** to analyze tombstone images. You ne
 2. Add a payment method (pay-as-you-go — no subscription required)
 3. Navigate to **API Keys** in the left sidebar
 4. Click **Create Key**, give it a name, and copy the key
-5. Paste the key into TRON-GRAVE when prompted (GUI) or into your `.env` file (CLI)
+5. Paste the key into the **API ključ** field of TRON-GRAVE and click **Spremi** (GUI), or into your `.env` file (CLI)
 
 **Estimated cost per image** (pre-run preview shown in the GUI):
 
-| Model | Est. cost/image | Basis |
+| Model | Price per MTok (input / output) | Est. cost/image (first run) |
 |---|---|---|
-| Claude Sonnet 5 (`claude-sonnet-5`) | ~$0.006 | estimate; billed at the intro rate of $2/$10 per MTok until Aug 31 2026, $3/$15 after |
-| Claude Opus 5 (`claude-opus-5`) | ~$0.025 | scaled from a measured Opus average; $5/$25 per MTok |
-| Claude Fable 5 (`claude-fable-5`) | ~$0.050 | estimate; $10/$50 per MTok — 2× Opus |
+| Claude Sonnet 5 (`claude-sonnet-5`) | $2 / $10 | ~$0.03 |
+| Claude Sonnet 5.5 (`claude-sonnet-5-5`) | $2 / $10 | ~$0.03 |
+| Claude Opus 5 (`claude-opus-5`) | $5 / $25 | ~$0.07 |
+| Claude Opus 5.5 (`claude-opus-5-5`) | $4 / $20 | ~$0.05 |
+| Claude Fable 5 (`claude-fable-5`) | $10 / $50 | ~$0.13 |
+| Claude Fable 5.1 (`claude-fable-5-1`) | $10 / $50 | ~$0.13 |
+
+First-run guesses assume ~4,700 input tokens per photo (after the API's own downscale) and ~1,500
+output tokens; after a run the GUI estimates from your real cost and time per photo for that model
+and effort. The GUI's preview line labels the first-run guess *gruba procjena* (rough estimate)
+and counts 20 s per photo; once a finished or stopped run with that model and effort has taught
+it, it uses those averages instead and reads *prema prošlim obradama* (from past runs). It also
+says how many HEIC/HEIF files it will skip.
 
 These are only for the *before-you-start* estimate. Once a run is going, the status bar and the
 end-of-run summary show the **real** cost, computed from each API response's actual token usage
 (including prompt-cache discounts) — not an estimate.
 
-All three offered models accept all five **effort** levels. Higher levels (`high` → `xhigh` → `max`)
-make the model reason harder per image at higher token cost; drop to `low`/`medium` for cheaper,
-faster runs.
+All six offered models accept all five **effort** levels (Opus 5.5's own default is medium; the GUI
+always sends your choice). Higher levels (`high` → `xhigh` → `max`) make the model reason harder
+per image at higher token cost; drop to `low`/`medium` for cheaper, faster runs.
 
 ---
 
@@ -129,10 +159,10 @@ faster runs.
 
 1. Go to the [Releases](../../releases) page
 2. Download the latest `TRON-GRAVE.exe`
-3. Double-click to run — no Python or installation required
-4. Enter your Anthropic API key when prompted on first launch
-5. (Optional) Pick a **Model** (Sonnet 5 default · Opus 5 · Fable 5) and an **Effort** level
-6. Select your input folder (photos) and output folder, then click **Start**
+3. Double-click to run — no Python or installation required. Windows may show *Windows protected your PC* for the downloaded exe (it is not code-signed): click **More info → Run anyway**.
+4. Paste your Anthropic API key into **API ključ** and click **Spremi**
+5. (Optional) Pick a **Model** (Sonnet 5 is the default) and a **Napor** (effort) level
+6. Select your input folder (photos) and output folder, then click **▶ Pokreni**
 
 ---
 
@@ -230,50 +260,84 @@ Options:
   --input   PATH     Folder containing tombstone images (required)
   --output  PATH     Folder where results will be saved (default: ./output)
   --model   NAME     Claude model to use (default: CLAUDE_MODEL env, else claude-sonnet-5).
-                     Accepts any model id, not just the ones in the GUI dropdown.
-                     GUI values: claude-sonnet-5, claude-opus-5, claude-fable-5
+                     Accepts any model id, not just the ones in the GUI dropdown, but needs a
+                     model that supports structured outputs.
+                     GUI values: claude-sonnet-5, claude-sonnet-5-5, claude-opus-5,
+                     claude-opus-5-5, claude-fable-5, claude-fable-5-1
   --effort  LEVEL    Reasoning effort: low | medium | high | xhigh | max (default: model's own).
-                     All three GUI models accept all five levels.
-  --resume           Skip images already listed in the output folder's .processed file;
-                     append to output.csv instead of overwriting it
+                     All six GUI models accept all five levels.
+  --resume           Skip photos listed in the output folder's .processed file and append to
+                     output.csv. Refuses (exit 1, error: [resume-refused]) when that would
+                     re-send finished photos: an output.csv with other columns (from an older
+                     version, or re-saved from Excel), output.csv rows without .processed, or
+                     .processed without output.csv; an unreadable output.csv is refused too.
+                     With --dry-run, lists only the photos that would run.
   --verbose          Show detailed per-image progress
   --dry-run          List discovered images without making any API calls
 ```
 
 The model can also be set with the `CLAUDE_MODEL` environment variable; the `--model` flag takes precedence.
 
-Verbose per-image lines include the real cost of that call and the running total, e.g.:
+Warnings go to stderr and do not change the exit code, e.g.
+`warning: skipping N .heic/.heif file(s); convert them to JPG first` (iPhone photos the API cannot
+take) and `warning: no price table entry for <model>` (a `--model` with no known price: the costs
+shown assume a default of $3 input / $15 output per million tokens, so treat them as a guess).
+
+Verbose output prints two lines per image, one when it starts and one with its verdict (`OK`,
+`PARTIAL` or `FAILED`). The verdict line of every photo the model answered also shows the real
+cost of that call and the running total, e.g.:
 ```
-[12/300] Processing img012.jpg ... OK (1 record) — $0.0184 (total: $2.35)
+[12/300] Processing img012.jpg ...
+[12/300] OK: img012.jpg (1 record) — $0.0184 (total: $2.35)
 ```
-and the final line before exit reports the run's total: `Total cost: $2.35`.
+and the closing lines report the run's total: `Total cost: $2.35`.
 
 **Exit codes:**
 - `0` — Every image processed cleanly, nothing flagged
 - `2` — Finished, but with something worth looking at: an image failed, a field was missing,
   **or** an ID had to be taken from the filename (the `ID iz naziva` note). `2` means
   "run completed, check the Notes column" — not that the run broke.
-- `1` — Fatal error: the run stopped early because the whole batch was doomed
-  (missing/invalid API key, no access to the model, unwritable output folder)
+- `1` — Fatal error: the run stopped early (missing/invalid API key, billing error, monthly spend
+  cap, no access to the model or no such model, three API failures in a row, output.csv locked
+  (e.g. open in Excel), resume refused, input folder is the output's `byhand/`, unwritable output
+  folder); stderr then reads `error: [tag] …`, where the tag is `api-401`, `api-402`, `api-403`,
+  `api-404`, `spend-cap`, `api-down`, `csv-locked`, `resume-refused` or `input-is-byhand` (a
+  missing key or input folder, or an unwritable output folder, prints a plain `error: …`)
 - `130` — Interrupted by user (Ctrl+C)
 
 ---
 
 ## Resuming & Retrying
 
-**Resume an interrupted run.** If a run is stopped (Ctrl+C, the GUI's Stop button, or a crash),
-check **"Nastavi (preskoči obrađene)"** in the GUI (or pass `--resume` on the CLI) before starting
-again on the same output folder. Resume reads the `.processed` file, skips the images listed
-there, and appends the rest to `output.csv` instead of overwriting it. This also means you don't
-get asked the "output.csv exists" backup/overwrite question, and you don't pay to reprocess images
-you've already paid for once. Images that produced nothing readable are left out of `.processed`
-deliberately, so a resume retries them rather than writing them off.
+**Resume an interrupted run.** If a run is stopped (Ctrl+C, the GUI's **Zaustavi** button, closing
+the window, or a crash), start it again on the same output folder. In the GUI, when that folder
+already has an `output.csv`, **Pokreni** asks **Nastavi** (resume) / **Prepiši** (move `output.csv`
+and `byhand/` aside and start over) / **Odustani**; on the CLI, pass `--resume`. Resume reads the
+`.processed` file, skips the photos listed there, and appends the rest to `output.csv` instead of
+overwriting it, so you don't pay to reprocess photos the model already answered. Photos that got
+no answer (for example the API call failed or the file could not be read) are left out of
+`.processed` deliberately, so a resume retries them rather than writing them off. **Nastavi** is
+greyed out, with the reason, when a resume would be refused (see `--resume` in the CLI reference).
 
-**Retry hard images with a stronger model.** Once a run finishes, if `byhand/` has any images, the
-**"Retry byhand (Opus)"** button becomes available. Clicking it re-runs just those images through
-Claude Opus 5 at `high` effort, writing results into a separate `byhand_retry/` subfolder (its own
-`output.csv` and, if anything is still unreadable, its own `byhand/`) — the original `output.csv` and
-`byhand/` are left untouched, so you can compare the two runs or merge the improved rows in by hand.
+Closing the window during a run asks first, then stops the run the same way as **Zaustavi**; the
+window closes once the run has stopped. Rows already written are kept, and a later
+**Pokreni → Nastavi** continues.
+
+Three API failures in a row stop the run, and a resume starts with the same photos, so a photo that
+keeps failing with `greška API-ja` must be moved out of the input folder and handled by hand.
+
+**Retry hard images with a stronger model.** Whenever the output folder's `byhand/` has images and
+no run is in progress, the **Ponovi byhand/** button is available. It re-runs just those images
+with Claude Opus 5.5 at `high` effort. If your selected model is stronger than Opus 5.5 (Fable 5,
+Fable 5.1) or your selected effort is higher than `high` (`xhigh`, `max`), that setting is kept
+instead, so a retry is never weaker than the run you chose. Before starting, it shows the model,
+effort and an estimated cost and asks you to confirm. Results go into a separate `byhand_retry/`
+subfolder (its own `output.csv`, `.processed` and, if anything is still unreadable, its own
+`byhand/`) — the original `output.csv` and `byhand/` are left untouched, so you can compare the two
+runs or merge the improved rows in by hand. A retry can be resumed like any run: if `byhand_retry/`
+already has an `output.csv`, **Ponovi byhand/** asks **Nastavi** / **Prepiši** / **Odustani** before
+touching it. While a retry runs, its `.tron-grave.lock` sits in `byhand_retry/`, and the app asks
+before using a folder that is already locked.
 
 ---
 
@@ -283,12 +347,15 @@ Claude Opus 5 at `high` effort, writing results into a separate `byhand_retry/` 
 TRON-GRAVE/
 ├── main.py                 # Entry point for PyInstaller executable
 ├── grave_ui.py             # Desktop GUI (Tkinter)
+├── ui_logic.py             # Tk-free GUI helpers (models, settings, estimates, texts)
 ├── grave_extractor.py      # CLI batch processor
 ├── _version.py             # Single source of the version string
 ├── extractor/
 │   ├── image_processor.py  # Claude Vision API integration + result classification
 │   ├── csv_writer.py       # CSV output (UTF-8 with BOM)
-│   └── file_utils.py       # File validation, ID assignment and MIME detection
+│   ├── file_utils.py       # File validation, ID assignment and byhand/ copies
+│   └── pricing.py          # per-model prices and real cost
+├── tests/                  # unittest suite
 ├── requirements.txt        # Python dependencies
 ├── build.bat               # One-click Windows build script
 ├── TRON-GRAVE.spec         # PyInstaller build config
@@ -310,16 +377,29 @@ TRON-GRAVE/
 
 ---
 
+## Tests
+
+Run the test suite from the repo root, inside the virtual environment:
+
+```bash
+python -m unittest discover -s tests -t . -v
+```
+
+GUI tests need a display and are skipped without one; no test calls the real API.
+
+---
+
 ## Building from Source (Windows .exe)
 
 Double-click **`build.bat`** (or run it from a terminal). It creates an isolated build
 virtualenv, installs the dependencies plus PyInstaller, and packs everything into one file.
 Building the exe needs **Python 3.11+** — running from source only needs 3.10+.
 
-To build by hand instead:
+To build by hand instead (PyInstaller 6.9 or newer is needed: the GUI's **Zaustavi** relies on how
+it starts the extractor):
 
 ```bash
-pip install pyinstaller
+pip install "pyinstaller>=6.9"
 pyinstaller TRON-GRAVE.spec
 ```
 

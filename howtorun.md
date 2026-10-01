@@ -51,8 +51,8 @@ Set the value:
 ANTHROPIC_API_KEY=your_api_key_here
 ```
 
-(You can skip this entirely if you use the desktop UI — enter the key in the **API Key** field
-and click **Save**.)
+(You can skip this entirely if you use the desktop UI — enter the key in the **API ključ** field
+and click **Spremi**.)
 
 ### 5. Run
 
@@ -168,9 +168,17 @@ All pip packages are listed in `requirements.txt`:
 |---|---|
 | `anthropic` | Anthropic Claude Vision API client |
 | `python-dotenv` | Loads `ANTHROPIC_API_KEY` from the `.env` file |
-| `Pillow` | Recompresses oversized images before sending to the API |
+| `Pillow` | Prepares every photo for the API: decodes it, applies its EXIF rotation, shrinks it to the 2576 px the model uses, and sends it in its real format |
 
 `tkinter` (used by the desktop UI) is part of the Python standard library on Windows and macOS. On Linux it must be installed via the OS package manager as shown above — it is not available through pip.
+
+To run the tests (from the project folder, inside the virtual environment):
+
+```
+python -m unittest discover -s tests -t . -v
+```
+
+GUI tests need a display and are skipped without one; no test calls the real API.
 
 ---
 
@@ -188,8 +196,13 @@ Results are written to the `--output` folder:
 
 | File | Contents |
 |---|---|
-| `output.csv` | Extracted burial records (UTF-8 with BOM, Excel-compatible) |
-| `byhand/` | Copies of images needing manual review — anything PARTIAL or FAILED |
+| `output.csv` | Extracted burial records (UTF-8 with BOM, Excel-compatible); the `File` column names the photo each row came from |
+| `byhand/` | Copies of images needing manual review — anything PARTIAL or FAILED, except photos whose API call failed (a resume retries those) |
+| `.processed` | Photos already answered; used by resume |
+| `byhand_retry/` | Results of **Ponovi byhand/** (own `output.csv`, `.processed` and `byhand/`) |
 
 Anything that needs attention is explained in the CSV's `Notes` column; there is no separate
 `errors.txt`.
+
+Three API failures in a row stop the run, and a resume starts with the same photos, so a photo that
+keeps failing with `greška API-ja` must be moved out of the input folder and handled by hand.
