@@ -181,7 +181,7 @@ class RunTextTests(unittest.TestCase):
         for tag in ("api-401", "api-402", "api-403", "api-404", "spend-cap", "api-down",
                     "csv-locked", "resume-refused", "input-is-byhand"):
             self.assertIn(tag, ui_logic.FATAL_EXPLANATIONS)
-        for code in ("old-format", "no-processed", "missing-csv", "unreadable"):
+        for code in ("old-format", "no-processed", "missing-csv", "unreadable", "not-utf8"):
             self.assertIn(code, ui_logic.RESUME_BLOCKERS)
 
     def test_the_row_count_survives_an_excel_saved_file(self):

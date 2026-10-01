@@ -224,12 +224,16 @@ class ResumeTests(CliCase):
             "old-format": ("ID,Name,Surname,Year of Birth,Year of Death,Notes\n1,A,B,,,\n", None),
             "no-processed": (",".join(CSV_COLUMNS) + "\n1,A,B,,,,p_1_x.jpg\n", None),
             "missing-csv": (None, "p_1_x.jpg\n"),
+            "not-utf8": ((",".join(CSV_COLUMNS) + "\r\n1,Mišo,Čupić,1920,1999,,p_1_x.jpg\r\n").encode("cp1250"),
+                         "p_1_x.jpg\n"),
         }
         for name, (content, processed) in cases.items():
             with self.subTest(name):
                 for f in ("output.csv", ".processed"):
                     (self.out / f).unlink(missing_ok=True)
-                if content is not None:
+                if isinstance(content, bytes):
+                    (self.out / "output.csv").write_bytes(content)
+                elif content is not None:
                     (self.out / "output.csv").write_text(content, encoding="utf-8-sig")
                 if processed is not None:
                     (self.out / ".processed").write_text(processed, encoding="utf-8")

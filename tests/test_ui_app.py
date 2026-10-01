@@ -10,7 +10,7 @@ from unittest import mock
 
 import grave_ui
 import ui_logic
-from extractor.csv_writer import append_rows, init_csv, init_processed, mark_processed
+from extractor.csv_writer import CSV_COLUMNS, append_rows, init_csv, init_processed, mark_processed
 from tests.helpers import jpeg_bytes
 from tests.ui_harness import REAL_DRAW_ATTENTION, REAL_LAUNCH_SUBPROCESS, REAL_SHOW_SUMMARY, AppCase
 
@@ -344,6 +344,17 @@ class ExistingOutputTests(RunCase):
         with mock.patch.object(grave_ui.App, "_ask_existing_output", return_value=None) as ask:
             self.app._on_start()
         self.assertIn("starija verzija", ask.call_args[0][4])
+        self.assertEqual(self.launched, [])
+        self.assertFalse(self.lock().exists())
+
+    def test_an_ansi_resaved_csv_blocks_nastavi_with_a_reason(self):
+        self.out.mkdir(parents=True)
+        (self.out / "output.csv").write_bytes(
+            (",".join(CSV_COLUMNS) + "\r\n1,Mišo,Čupić,1920,1999,,p_1_x.jpg\r\n").encode("cp1250"))
+        (self.out / ".processed").write_text("p_1_x.jpg\n", encoding="utf-8")
+        with mock.patch.object(grave_ui.App, "_ask_existing_output", return_value=None) as ask:
+            self.app._on_start()
+        self.assertIn("UTF-8", ask.call_args[0][4])
         self.assertEqual(self.launched, [])
         self.assertFalse(self.lock().exists())
 

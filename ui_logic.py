@@ -207,6 +207,8 @@ RESUME_BLOCKERS = {
     "no-processed": "nedostaje popis obrađenih slika (.processed), pa bi se sve slike ponovno poslale",
     "missing-csv": "output.csv je prazan ili nedostaje",
     "unreadable": "output.csv se ne može pročitati",
+    "not-utf8": "output.csv više nije u UTF-8 zapisu (ponovno je spremljen iz Excela ili uređivača "
+                "kao ANSI) — spremite ga kao UTF-8 ili krenite ispočetka",
 }
 
 # The extractor's fatal errors read "error: [tag] ...".

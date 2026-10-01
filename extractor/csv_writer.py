@@ -89,9 +89,11 @@ def resume_problem(output_dir: Path) -> str | None:
     'no-processed' output.csv has rows but there is no .processed file
     'missing-csv'  .processed lists images but output.csv is gone
     'unreadable'   output.csv could not be parsed
+    'not-utf8'     output.csv is no longer UTF-8 (re-saved as ANSI by Excel or an editor)
     """
+    csv_path = output_dir / 'output.csv'
     try:
-        header, rows = read_csv(output_dir / 'output.csv')
+        header, rows = read_csv(csv_path)
     except (OSError, csv.Error):
         return 'unreadable'
     processed = read_processed(output_dir)
@@ -101,4 +103,11 @@ def resume_problem(output_dir: Path) -> str | None:
         return 'old-format'
     if rows and not (output_dir / PROCESSED_FILE).exists():
         return 'no-processed'
+    # Last, so an Excel re-save in a ';' locale keeps its 'old-format' reason (other columns).
+    try:
+        csv_path.read_bytes().decode('utf-8')   # a BOM decodes fine; an ANSI re-save does not
+    except UnicodeDecodeError:
+        return 'not-utf8'
+    except OSError:
+        return 'unreadable'
     return None
