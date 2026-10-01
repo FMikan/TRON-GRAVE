@@ -308,15 +308,8 @@ class TallyTests(unittest.TestCase):
 
 
 class WindowsHelperTests(unittest.TestCase):
-    def test_child_pids(self):
-        entries = [(1, 0), (10, 5), (11, 5), (12, 10), (5, 1)]
-        self.assertEqual(ui_logic.child_pids(entries, 5), [10, 11])
-
-    def test_a_process_is_never_its_own_child(self):
-        # the System Idle Process lists itself as its parent
-        self.assertEqual(ui_logic.child_pids([(0, 0), (4, 0)], 0), [4])
-
     def test_scaled_geometry_stays_on_screen(self):
-        # 150 % on a 1920x1080 panel leaves a 1280x720 logical screen
-        self.assertEqual(ui_logic.scaled_geometry(1180, 700, 1.5, 1280, 720), (1152, 648))
+        # A scale above 1 only arrives once the process is DPI-aware, and Tk then reports physical
+        # pixels: 150 % on a 1920x1080 panel asks for 1770x1050 and is held to 90 % of the screen.
+        self.assertEqual(ui_logic.scaled_geometry(1180, 700, 1.5, 1920, 1080), (1728, 972))
         self.assertEqual(ui_logic.scaled_geometry(1180, 700, 1.0, 2560, 1440), (1180, 700))

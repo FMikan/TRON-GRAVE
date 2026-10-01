@@ -753,24 +753,9 @@ class App:
         if not proc or pgid is None or proc.poll() is not None:
             return
         if sys.platform == "win32":
-            if getattr(sys, "frozen", False):
-                # One-file build: proc is the bootloader and its child is the Python process
-                # doing the work. Ending only the child lets the bootloader delete its _MEI temp
-                # folder and exit with our code 130; killing both leaves the folder behind.
-                # Any failure here falls through to the taskkill fallback below.
-                try:
-                    for pid in _windows_child_pids(proc.pid):
-                        _windows_terminate(pid, 130)
-                    for _ in range(50):
-                        if proc.poll() is not None:
-                            return
-                        time.sleep(0.1)
-                except Exception:
-                    pass
-            # In the one-file PyInstaller build the process we spawned is the bootloader,
-            # not the Python process doing the work -- terminating it alone can leave the
-            # extractor running detached, still making paid API calls with no window to
-            # stop it. taskkill /T takes down the whole tree.
+            # taskkill /T ends the extractor and anything it started. The one-file exe runs it as a
+            # worker of its own unpacked folder (PyInstaller 6.9+, pinned in build.bat), so there is
+            # no second bootloader or temp folder to clean up.
             try:
                 subprocess.run(
                     ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
@@ -1152,12 +1137,6 @@ class App:
         if self.proc and self.proc.poll() is None:
             try:
                 if sys.platform == "win32":
-                    # One-file build: the bootloader's child makes the paid calls; end it too.
-                    try:
-                        for pid in _windows_child_pids(self.proc.pid):
-                            _windows_terminate(pid, 130)
-                    except Exception:
-                        pass            # whatever failed, the bootloader is still killed
                     self.proc.kill()
                 elif self.pgid is not None:
                     os.killpg(self.pgid, signal.SIGKILL)
@@ -1334,65 +1313,6 @@ def _enable_dpi_awareness():
             ctypes.windll.user32.SetProcessDPIAware()
     except (AttributeError, OSError):
         pass
-
-
-def _windows_child_pids(parent_pid: int) -> list[int]:
-    """PIDs of parent_pid's child processes, from a Toolhelp32 snapshot ([] if it fails)."""
-    import ctypes
-    from ctypes import wintypes
-
-    class PROCESSENTRY32W(ctypes.Structure):
-        _fields_ = [
-            ("dwSize", wintypes.DWORD),
-            ("cntUsage", wintypes.DWORD),
-            ("th32ProcessID", wintypes.DWORD),
-            ("th32DefaultHeapID", ctypes.c_size_t),
-            ("th32ModuleID", wintypes.DWORD),
-            ("cntThreads", wintypes.DWORD),
-            ("th32ParentProcessID", wintypes.DWORD),
-            ("pcPriClassBase", ctypes.c_long),
-            ("dwFlags", wintypes.DWORD),
-            ("szExeFile", ctypes.c_wchar * 260),
-        ]
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
-    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
-    kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
-    kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
-    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-
-    snapshot = kernel32.CreateToolhelp32Snapshot(0x2, 0)         # TH32CS_SNAPPROCESS
-    if not snapshot or snapshot == ctypes.c_void_p(-1).value:   # INVALID_HANDLE_VALUE
-        return []
-    entries = []
-    try:
-        entry = PROCESSENTRY32W()
-        entry.dwSize = ctypes.sizeof(entry)
-        ok = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
-        while ok:
-            entries.append((entry.th32ProcessID, entry.th32ParentProcessID))
-            ok = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
-    finally:
-        kernel32.CloseHandle(snapshot)
-    return ui_logic.child_pids(entries, parent_pid)
-
-
-def _windows_terminate(pid: int, exit_code: int) -> None:
-    import ctypes
-    from ctypes import wintypes
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.OpenProcess.restype = wintypes.HANDLE
-    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
-    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-    handle = kernel32.OpenProcess(0x0001, False, pid)          # PROCESS_TERMINATE
-    if handle:
-        try:
-            kernel32.TerminateProcess(handle, exit_code)
-        finally:
-            kernel32.CloseHandle(handle)
 
 
 def _flash_taskbar(root: tk.Tk) -> None:

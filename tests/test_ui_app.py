@@ -1019,108 +1019,22 @@ class CloseTests(AppCase):
 
 
 class WindowsStopTests(AppCase):
-    def test_the_frozen_build_stops_the_child_first(self):
-        proc = mock.Mock(pid=4321)
-        proc.poll.side_effect = [None, None, 0]
-        self.app.proc, self.app.pgid = proc, 4321
-        with mock.patch.object(grave_ui.sys, "platform", "win32"), \
-                mock.patch.object(grave_ui.sys, "frozen", True, create=True), \
-                mock.patch.object(grave_ui, "_windows_child_pids", return_value=[999]), \
-                mock.patch.object(grave_ui, "_windows_terminate") as terminate, \
-                mock.patch.object(grave_ui.subprocess, "run") as taskkill, \
-                mock.patch("time.sleep"):
-            self.app._terminate_run()
-        terminate.assert_called_once_with(999, 130)
-        taskkill.assert_not_called()
-        self.app.proc = None
-
-    def test_the_bootloader_is_taskkilled_if_it_outlives_its_child(self):
+    def test_stop_in_the_frozen_build_runs_taskkill_at_once(self):
+        # PyInstaller 6.9+ runs the extractor as a worker of the GUI's own unpacked folder: there is
+        # no bootloader child to end first, so nothing may be waited for before taskkill.
         order = []
         proc = mock.Mock(pid=4321)
-        proc.poll.return_value = None                 # still there after the child was ended
+        proc.poll.side_effect = [None, 0]             # gone as soon as taskkill has run
         self.app.proc, self.app.pgid = proc, 4321
         with mock.patch.object(grave_ui.sys, "platform", "win32"), \
                 mock.patch.object(grave_ui.sys, "frozen", True, create=True), \
                 mock.patch.object(grave_ui.subprocess, "CREATE_NO_WINDOW", 0, create=True), \
-                mock.patch.object(grave_ui, "_windows_child_pids", return_value=[999]), \
-                mock.patch.object(grave_ui, "_windows_terminate", lambda pid, code: order.append("child")), \
-                mock.patch.object(grave_ui.subprocess, "run", lambda *args, **kwargs: order.append("taskkill")), \
-                mock.patch("time.sleep"):
+                mock.patch.object(grave_ui.subprocess, "run", lambda cmd, **kwargs: order.append(cmd)), \
+                mock.patch("time.sleep", lambda seconds: order.append("sleep")):
             self.app._terminate_run()
-        self.assertEqual(order, ["child", "taskkill"])
-        self.app.proc = None
-
-    def test_a_source_run_is_stopped_by_taskkill_without_looking_for_children(self):
-        proc = mock.Mock(pid=4321)
-        proc.poll.side_effect = [None, 0]             # gone once taskkill has run
-        self.app.proc, self.app.pgid = proc, 4321
-        with mock.patch.object(grave_ui.sys, "platform", "win32"), \
-                mock.patch.object(grave_ui.sys, "frozen", False, create=True), \
-                mock.patch.object(grave_ui.subprocess, "CREATE_NO_WINDOW", 0, create=True), \
-                mock.patch.object(grave_ui, "_windows_child_pids") as child_pids, \
-                mock.patch.object(grave_ui.subprocess, "run") as taskkill:
-            self.app._terminate_run()
-        child_pids.assert_not_called()                # proc is the worker itself: nothing to wait 5 s for
-        taskkill.assert_called_once()
-        self.app.proc = None
-
-    def test_the_exit_kill_ends_the_bootloaders_child_before_it_and_lets_go_of_the_lock(self):
-        lock = self.tmp / ".tron-grave.lock"
-        lock.write_text("token", encoding="utf-8")
-        self.app.lock_path, self.app.lock_token = lock, "token"
-        order = []
-        proc = mock.Mock(pid=4321)
-        proc.poll.return_value = None
-        proc.kill.side_effect = lambda: order.append("bootloader")
-        self.app.proc = proc
-        with mock.patch.object(grave_ui.sys, "platform", "win32"), \
-                mock.patch.object(grave_ui, "_windows_child_pids", return_value=[999]) as child_pids, \
-                mock.patch.object(grave_ui, "_windows_terminate", lambda pid, code: order.append(("child", pid, code))):
-            self.app._atexit_kill()
-        child_pids.assert_called_once_with(4321)
-        self.assertEqual(order, [("child", 999, 130), "bootloader"])
-        self.assertFalse(lock.exists())
-        self.app.proc = None
-
-    def test_stop_goes_straight_to_taskkill_if_ending_the_child_fails(self):
-        for helper, error in (("_windows_child_pids", AttributeError("no such export")),
-                              ("_windows_terminate", OSError(5, "access denied")),
-                              ("_windows_child_pids", ctypes.ArgumentError("bad argument"))):
-            with self.subTest(helper=helper, error=type(error).__name__):
-                helpers = {"_windows_child_pids": mock.Mock(return_value=[999]), "_windows_terminate": mock.Mock()}
-                helpers[helper].side_effect = error
-                proc = mock.Mock(pid=4321)
-                proc.poll.side_effect = [None, 0]         # gone once taskkill has run
-                self.app.proc, self.app.pgid = proc, 4321
-                with mock.patch.object(grave_ui.sys, "platform", "win32"), \
-                        mock.patch.object(grave_ui.sys, "frozen", True, create=True), \
-                        mock.patch.object(grave_ui.subprocess, "CREATE_NO_WINDOW", 0, create=True), \
-                        mock.patch.multiple(grave_ui, **helpers), \
-                        mock.patch.object(grave_ui.subprocess, "run") as taskkill, \
-                        mock.patch("time.sleep") as sleep:
-                    self.app._terminate_run()
-                taskkill.assert_called_once()
-                sleep.assert_not_called()                 # no 5 s wait for a child that was never ended
-        self.app.proc = None
-
-    def test_the_exit_kill_reaches_the_bootloader_and_the_lock_even_if_ending_the_child_fails(self):
-        for helper, error in (("_windows_child_pids", AttributeError("no such export")),
-                              ("_windows_terminate", OSError(5, "access denied")),
-                              ("_windows_child_pids", ctypes.ArgumentError("bad argument"))):
-            with self.subTest(helper=helper, error=type(error).__name__):
-                lock = self.tmp / ".tron-grave.lock"
-                lock.write_text("token", encoding="utf-8")
-                self.app.lock_path, self.app.lock_token = lock, "token"
-                helpers = {"_windows_child_pids": mock.Mock(return_value=[999]), "_windows_terminate": mock.Mock()}
-                helpers[helper].side_effect = error
-                proc = mock.Mock(pid=4321)
-                proc.poll.return_value = None
-                self.app.proc = proc
-                with mock.patch.object(grave_ui.sys, "platform", "win32"), \
-                        mock.patch.multiple(grave_ui, **helpers):
-                    self.app._atexit_kill()
-                proc.kill.assert_called_once_with()
-                self.assertFalse(lock.exists())
+        self.assertEqual(order, [["taskkill", "/T", "/F", "/PID", "4321"]])      # no sleep before or after it
+        proc.terminate.assert_not_called()            # it returned right after taskkill
+        proc.kill.assert_not_called()
         self.app.proc = None
 
     def test_the_window_is_not_scaled_off_windows(self):
