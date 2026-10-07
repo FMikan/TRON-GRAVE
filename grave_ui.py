@@ -170,6 +170,7 @@ class App:
         self._api_key: str = ""
         self._settings: dict = {}
         self._log_file = None
+        self._lock_note: str | None = None
 
         self._load_settings()
         self._fonts = self._pick_fonts()
@@ -907,12 +908,19 @@ class App:
 
     def _take_lock(self, out_dir: Path) -> bool:
         lock = out_dir / ui_logic.LOCK_NAME
-        if lock.exists() and self._ask_choice(
-            "Mapa je zauzeta",
-            f"{lock} postoji.\n\nMožda neka druga obrada upravo koristi ovu izlaznu mapu.",
-            [("use", "Svejedno koristi mapu"), ("cancel", "Odustani")], default="cancel",
-        ) != "use":
-            return False
+        if lock.exists():
+            try:
+                stale = ui_logic.lock_owner_gone(lock.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                stale = False
+            if stale:
+                self._lock_note = "Mapa je ostala zaključana nakon prekinute obrade — preuzimam je.\n"
+            elif self._ask_choice(
+                "Mapa je zauzeta",
+                f"{lock} postoji.\n\nMožda neka druga obrada upravo koristi ovu izlaznu mapu.",
+                [("use", "Svejedno koristi mapu"), ("cancel", "Odustani")], default="cancel",
+            ) != "use":
+                return False
         token = ui_logic.new_lock_token()
         try:
             lock.write_text(token, encoding="utf-8")
@@ -927,6 +935,9 @@ class App:
         self._reset_run_state()
         self._set_running(True)
         self._open_run_log(out_dir)
+        if self._lock_note:                 # _reset_run_state cleared the log; say it now
+            self._append_log(self._lock_note, "info")
+            self._lock_note = None
         cmd = [
             *_EXTRACTOR_CMD,
             "--input", str(in_dir),

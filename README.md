@@ -358,7 +358,8 @@ subfolder (its own `output.csv`, `.processed` and, if anything is still unreadab
 runs or merge the improved rows in by hand. A retry can be resumed like any run: if `byhand_retry/`
 already has an `output.csv`, **Ponovno obradi jačim modelom…** asks **Nastavi** / **Prepiši** / **Odustani** before
 touching it. While a retry runs, its `.tron-grave.lock` sits in `byhand_retry/`, and the app asks
-before using a folder that is already locked.
+before using a folder that is already locked — unless the lock was left on this computer by a run
+that no longer exists, which it takes over and notes in the log.
 
 ---
 

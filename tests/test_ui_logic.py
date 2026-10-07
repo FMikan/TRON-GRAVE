@@ -1,7 +1,9 @@
 import json
 import os
 import shutil
+import socket
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -133,6 +135,38 @@ class LockTests(unittest.TestCase):
         ui_logic.release_lock(lock, mine)
         self.assertFalse(lock.exists())
         ui_logic.release_lock(lock, mine)          # already gone: no error
+
+    def dead_pid(self) -> int:
+        out = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"],
+                             capture_output=True, text=True, check=True).stdout
+        return int(out)
+
+    def test_the_token_names_the_machine_and_the_process(self):
+        host, pid, tail = ui_logic.new_lock_token().rsplit(":", 2)
+        self.assertEqual((host, pid, len(tail)), (socket.gethostname(), str(os.getpid()), 32))
+
+    def test_only_a_lock_from_this_machine_whose_process_ended_is_stale(self):
+        host = socket.gethostname()
+        self.assertTrue(ui_logic.lock_owner_gone(f"{host}:{self.dead_pid()}:{'0' * 32}"))
+        self.assertFalse(ui_logic.lock_owner_gone(ui_logic.new_lock_token()))            # alive: us
+        self.assertFalse(ui_logic.lock_owner_gone(f"other-host:{self.dead_pid()}:{'0' * 32}"))
+        self.assertFalse(ui_logic.lock_owner_gone(f"{os.getpid()}:{'0' * 32}"))          # 3.6.0's format
+        self.assertFalse(ui_logic.lock_owner_gone("not a token"))
+
+    def test_on_windows_the_exit_code_says_whether_the_process_runs(self):
+        kernel32 = mock.Mock()
+        kernel32.OpenProcess.return_value = 42
+
+        def exit_code(_handle, ref):
+            ref._obj.value = 259                    # STILL_ACTIVE
+            return 1
+        kernel32.GetExitCodeProcess.side_effect = exit_code
+        with mock.patch.object(ui_logic.sys, "platform", "win32"), \
+                mock.patch.object(ui_logic.ctypes, "WinDLL", return_value=kernel32, create=True):
+            self.assertTrue(ui_logic.pid_alive(1234))
+            kernel32.OpenProcess.return_value = 0
+            with mock.patch.object(ui_logic.ctypes, "get_last_error", return_value=87, create=True):
+                self.assertFalse(ui_logic.pid_alive(1234))
 
     def test_a_lock_file_that_is_not_text_is_left_in_place(self):
         tmp = Path(tempfile.mkdtemp())

@@ -1,10 +1,12 @@
 """Tk-free helpers behind the desktop GUI, kept apart from grave_ui.py so they can be tested."""
 
 import csv
+import ctypes
 import json
 import math
 import os
 import re
+import socket
 import sys
 import uuid
 from pathlib import Path
@@ -125,7 +127,41 @@ LOCK_NAME = ".tron-grave.lock"
 
 
 def new_lock_token() -> str:
-    return f"{os.getpid()}:{uuid.uuid4().hex}"
+    return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex}"
+
+
+def pid_alive(pid: int) -> bool:
+    """Whether a process with this id runs on this machine (leans towards yes when unsure)."""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(0x1000, False, pid)         # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return ctypes.get_last_error() != 87                   # ERROR_INVALID_PARAMETER: no such process
+        try:
+            code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return True
+            return code.value == 259                               # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:              # PermissionError: it exists, owned by someone else
+        return True
+    return True
+
+
+def lock_owner_gone(token: str, host: str | None = None) -> bool:
+    """True only for a lock this machine wrote whose process has ended (a crash or a kill)."""
+    parts = token.strip().rsplit(":", 2)
+    if len(parts) != 3 or not parts[1].isdigit():
+        return False                      # 3.6.0's "<pid>:<uuid>" or someone else's file: ask
+    lock_host, pid, _token = parts
+    return lock_host == (host or socket.gethostname()) and not pid_alive(int(pid))
 
 
 def release_lock(lock: Path, token: str) -> None:

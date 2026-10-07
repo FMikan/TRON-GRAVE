@@ -3,6 +3,9 @@ import json
 import os
 import re
 import shutil
+import socket
+import subprocess
+import sys
 import time
 import tkinter as tk
 import tkinter.font as tkfont
@@ -418,7 +421,7 @@ class LockAndDryRunTests(RunCase):
 
     def test_a_run_takes_a_token_lock_and_releases_it_on_exit(self):
         self.app._on_start()
-        self.assertTrue(self.lock().read_text(encoding="utf-8").startswith(f"{os.getpid()}:"))
+        self.assertTrue(self.lock().read_text(encoding="utf-8").startswith(f"{socket.gethostname()}:{os.getpid()}:"))
         # the command carries model and effort ids, not the dropdown labels
         cmd = self.launched[-1]
         pairs = list(zip(cmd, cmd[1:]))
@@ -540,6 +543,30 @@ class RunLogFileTests(RunCase):
         self.app._handle_line("stdout", "[2/2] Processing p_2_x.jpg ...\n")
         self.assertIsNone(self.app._log_file)
         self.assertEqual(self.app.log.get("1.0", "end").count("Zapisnik se ne može spremiti"), 1)
+
+
+class StaleLockTests(RunCase):
+    def test_a_lock_left_by_a_crashed_run_on_this_machine_is_taken_over(self):
+        self.out.mkdir(parents=True)
+        dead = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+        self.lock().write_text(f"{socket.gethostname()}:{dead}:{'0' * 32}", encoding="utf-8")
+        self.app._on_start()
+        self.choices.assert_not_called()
+        self.assertTrue(self.launched)
+        self.assertIn("preuzimam je", self.app.log.get("1.0", "end"))
+        self.assertTrue(self.lock().read_text(encoding="utf-8").startswith(
+            f"{socket.gethostname()}:{os.getpid()}:"))
+
+    def test_a_live_foreign_or_old_lock_still_asks(self):
+        self.out.mkdir(parents=True)
+        for token in (ui_logic.new_lock_token(), "other-host:1:abc", "123:abc"):
+            with self.subTest(token=token):
+                self.lock().write_text(token, encoding="utf-8")
+                self.answer("cancel")
+                self.app._on_start()
+                self.assertEqual(self.choices.call_args[0][0], "Mapa je zauzeta")
+                self.assertEqual(self.launched, [])
 
 class ProgressTests(AppCase):
     def feed(self, *lines):
