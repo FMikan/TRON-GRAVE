@@ -12,6 +12,8 @@ import grave_ui
 REAL_SHOW_SUMMARY = grave_ui.App._show_summary_popup
 REAL_LAUNCH_SUBPROCESS = grave_ui.App._launch_subprocess
 REAL_DRAW_ATTENTION = grave_ui.App._draw_attention
+REAL_PRESENT = grave_ui.App._present
+REAL_ASK_EXISTING_OUTPUT = grave_ui.App._ask_existing_output
 
 
 class AppCase(unittest.TestCase):
@@ -34,6 +36,8 @@ class AppCase(unittest.TestCase):
         self._patch(grave_ui.App, "_show_summary_popup", mock.Mock())
         self._patch(grave_ui.App, "_ask_existing_output", mock.Mock(side_effect=AssertionError(
             "unexpected Nastavi/Prepiši/Odustani dialog: patch _ask_existing_output in this test")))
+        # Placing a dialog maps it; a test must never flash a window.
+        self._patch(grave_ui.App, "_present", mock.Mock())
         self.launched = []
         self._patch(grave_ui.App, "_launch_subprocess", lambda app, cmd: self.launched.append(cmd))
         self._patch(grave_ui.ui_logic, "LEGACY_SETTINGS_PATH", self.tmp / "legacy" / "ui.json")

@@ -14,7 +14,8 @@ import grave_ui
 import ui_logic
 from extractor.csv_writer import CSV_COLUMNS, append_rows, init_csv, init_processed, mark_processed
 from tests.helpers import jpeg_bytes
-from tests.ui_harness import REAL_DRAW_ATTENTION, REAL_LAUNCH_SUBPROCESS, REAL_SHOW_SUMMARY, AppCase
+from tests.ui_harness import (REAL_ASK_EXISTING_OUTPUT, REAL_DRAW_ATTENTION, REAL_LAUNCH_SUBPROCESS,
+                              REAL_PRESENT, REAL_SHOW_SUMMARY, AppCase)
 
 
 def contrast(fg: str, bg: str) -> float:
@@ -164,6 +165,47 @@ class ThemeTests(AppCase):
         after_palette = source.split("THEME = {", 1)[1].split("\n}\n", 1)[1]
         self.assertEqual(re.findall(r"""["']#[0-9a-fA-F]{6}["']""", after_palette), [])
 
+
+
+class DialogPlacementTests(AppCase):
+    def test_present_asks_tk_to_centre_the_dialog_on_the_main_window(self):
+        placed = []
+        self.root.tk.createcommand("record_placement", lambda *args: placed.append(args))
+        self.root.tk.eval("rename ::tk::PlaceWindow ::tk::PlaceWindow_real\n"
+                          "proc ::tk::PlaceWindow {args} {record_placement {*}$args}")
+        self.addCleanup(self.root.tk.eval, "rename ::tk::PlaceWindow {}\n"
+                                           "rename ::tk::PlaceWindow_real ::tk::PlaceWindow")
+        win = self.app._dialog("Proba")
+        self.addCleanup(win.destroy)
+        REAL_PRESENT(self.app, win)
+        self.assertEqual(placed, [(str(win), "widget", str(self.root))])
+
+    def test_a_dialog_starts_hidden_themed_and_tied_to_the_main_window(self):
+        win = self.app._dialog("Proba")
+        self.addCleanup(win.destroy)
+        self.assertEqual(win.state(), "withdrawn")
+        self.assertEqual(win.title(), "Proba")
+        self.assertEqual(str(win.cget("background")), grave_ui.THEME["BG"])
+        self.assertEqual(str(win.transient()), str(self.root))
+
+    def test_the_summary_and_the_resume_dialog_are_placed_before_they_show(self):
+        csv_path = self.tmp / "output.csv"
+        init_csv(csv_path)
+        summary = REAL_SHOW_SUMMARY(self.app, csv_path, "Sažetak obrade")
+        self.addCleanup(summary.destroy)
+        self.app._present.assert_called_once_with(summary)
+        self.app._present.reset_mock()
+        shown = []
+
+        def close(win):
+            shown.append(win)
+            win.destroy()
+
+        with mock.patch.object(tk.Toplevel, "wait_visibility"), \
+                mock.patch.object(tk.Toplevel, "grab_set"), \
+                mock.patch.object(self.root, "wait_window", side_effect=close):
+            REAL_ASK_EXISTING_OUTPUT(self.app, csv_path, 1, 1, 2, None)
+        self.app._present.assert_called_once_with(shown[0])
 
 class FontTests(AppCase):
     def test_windows_fonts_are_used_where_installed(self):

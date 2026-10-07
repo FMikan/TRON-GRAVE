@@ -586,18 +586,30 @@ class App:
     def _ask_existing_output(self, csv_path: Path, rows: int, done: int, total: int,
                              blocker: str | None) -> str | None:
         win, choice = self._build_existing_output_dialog(csv_path, rows, done, total, blocker)
+        self._present(win)
         win.wait_visibility()
         win.grab_set()
         self.root.wait_window(win)
         return choice["value"]
 
-    def _build_existing_output_dialog(self, csv_path: Path, rows: int, done: int, total: int,
-                                      blocker: str | None):
+    def _dialog(self, title: str) -> tk.Toplevel:
+        """A themed dialog tied to the main window, hidden until _present places it."""
         win = tk.Toplevel(self.root)
-        win.title("output.csv već postoji")
+        win.withdraw()
+        win.title(title)
         win.configure(background=self._bg)
         win.transient(self.root)
         win.resizable(False, False)
+        return win
+
+    def _present(self, win: tk.Toplevel) -> None:
+        """Show a dialog centred on the main window: Tk centres only its own message boxes, and a
+        bare Toplevel opens wherever the window manager puts it (top-left on Windows)."""
+        self.root.tk.call("tk::PlaceWindow", str(win), "widget", str(self.root))
+
+    def _build_existing_output_dialog(self, csv_path: Path, rows: int, done: int, total: int,
+                                      blocker: str | None):
+        win = self._dialog("output.csv već postoji")
         choice = {"value": None}
 
         def pick(value):
@@ -1058,11 +1070,7 @@ class App:
         total = ok + partial + failed
         reasons = ui_logic.tally_review_notes(csv_path, self._flagged)
 
-        win = tk.Toplevel(self.root)
-        win.title(title)
-        win.configure(background=self._bg)
-        win.transient(self.root)
-        win.resizable(False, False)
+        win = self._dialog(title)
 
         frm = ttk.Frame(win, padding=16)
         frm.grid(row=0, column=0, sticky="nsew")
@@ -1090,6 +1098,7 @@ class App:
         win.bind("<Escape>", lambda _e: win.destroy())
         win.bind("<Return>", lambda _e: win.destroy())
         close_btn.focus_set()
+        self._present(win)
 
         def grab():
             try:
