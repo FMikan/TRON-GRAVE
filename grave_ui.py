@@ -67,6 +67,11 @@ THEME = {
 RETRY_LABEL = "Ponovno obradi jačim modelom…"
 # Excel opens a double-clicked .csv with the system list separator, ";" under Croatian settings.
 EXCEL_HINT = "U Excelu: Podaci → Iz teksta/CSV-a (Data → From Text/CSV), razdjelnik: zarez."
+ONBOARDING = ("Kako započeti:\n"
+              "1. Ulazna mapa — mapa sa slikama spomenika.\n"
+              "2. Izlazna mapa — tu nastaju output.csv i byhand/.\n"
+              "3. API ključ — upišite ga i kliknite Spremi ključ.\n"
+              "4. Pokreni.\n")
 
 
 class App:
@@ -132,6 +137,8 @@ class App:
         self.root.after(50, self._drain_queue)
         self._refresh_preview()
         self._refresh_output_buttons()
+        if self._refresh_readiness() != "Spremno.":     # the steps only while setup is incomplete
+            self._append_log(ONBOARDING, "info")
         # Last of all: the layout pass can map the window, and the folder checks above may wait on
         # a slow network share. Never narrower than the control row: the Croatian labels are long
         # and fonts differ per OS and DPI, so a fixed minimum cut off the last button, and at 175 %
@@ -453,6 +460,7 @@ class App:
             self.input_var.set(d)
             self._save_settings()
             self._refresh_preview()
+            self._refresh_readiness()
 
     def _pick_output(self):
         d = filedialog.askdirectory(
@@ -464,6 +472,7 @@ class App:
             self._save_settings()
             self._refresh_preview()
             self._refresh_output_buttons()
+            self._refresh_readiness()
 
     def _refresh_preview(self):
         in_path = self.input_var.get()
@@ -866,9 +875,31 @@ class App:
         if not key:
             # An exported variable beats .env, as it does for the command-line extractor. .env is
             # read without loading it into os.environ, which every child process inherits.
-            key = (os.environ.get("ANTHROPIC_API_KEY")
-                   or dotenv_values(PROJECT_DIR / ".env").get("ANTHROPIC_API_KEY") or "").strip()
+            key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if not key:
+            try:
+                key = (dotenv_values(PROJECT_DIR / ".env").get("ANTHROPIC_API_KEY") or "").strip()
+            except (OSError, ValueError):       # an unreadable .env holds no usable key
+                key = ""
         return key
+
+    def _key_available(self) -> bool:
+        return bool(self._resolve_api_key())
+
+    def _refresh_readiness(self) -> str | None:
+        """While no run is in progress, the status line names the next setup step."""
+        if self.proc is not None:
+            return None
+        if not self.input_var.get():
+            text = "Odaberite ulaznu mapu sa slikama."
+        elif not self.output_var.get():
+            text = "Odaberite izlaznu mapu."
+        elif not self._key_available():
+            text = "Upišite API ključ i kliknite Spremi ključ."
+        else:
+            text = "Spremno."
+        self.status_var.set(text)
+        return text
 
     def _launch_subprocess(self, cmd: list[str]):
         # The key goes only into the extractor's environment -- putting it in os.environ

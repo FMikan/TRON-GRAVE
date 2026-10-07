@@ -45,6 +45,7 @@ class AppCase(unittest.TestCase):
         self.launched = []
         self._patch(grave_ui.App, "_launch_subprocess", lambda app, cmd: self.launched.append(cmd))
         self._patch(grave_ui.ui_logic, "LEGACY_SETTINGS_PATH", self.tmp / "legacy" / "ui.json")
+        self._patch(grave_ui, "PROJECT_DIR", self.tmp)          # never read the developer's real .env
         self.app = grave_ui.App(self.root)
 
     def answer(self, key):

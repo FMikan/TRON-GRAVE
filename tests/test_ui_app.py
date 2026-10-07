@@ -45,7 +45,7 @@ class LabelTests(AppCase):
         self.assertEqual(self.app.btn_retry_byhand.cget("text"), grave_ui.RETRY_LABEL)
         self.assertEqual(self.app.btn_dry.cget("text"), "Probni prolaz")
         self.assertEqual(self.app.btn_open.cget("text"), "Otvori")
-        self.assertEqual(self.app.status_var.get(), "Spremno.")
+        self.assertEqual(self.app.status_var.get(), "Odaberite ulaznu mapu sa slikama.")
 
     def test_model_dropdown_shows_names_and_maps_back_to_ids(self):
         self.assertEqual(list(self.app.model_combo.cget("values")),
@@ -1137,6 +1137,43 @@ class OpenMenuTests(AppCase):
 
 
 
+
+
+class ReadinessTests(AppCase):
+    def test_the_status_names_the_next_setup_step(self):
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": ""}):
+            steps = [self.app._refresh_readiness()]
+            self.app.input_var.set(str(self.tmp))
+            steps.append(self.app._refresh_readiness())
+            self.app.output_var.set(str(self.tmp))
+            steps.append(self.app._refresh_readiness())
+            self.app.api_key_var.set("sk-x")
+            steps.append(self.app._refresh_readiness())
+        self.assertEqual(steps, ["Odaberite ulaznu mapu sa slikama.", "Odaberite izlaznu mapu.",
+                                 "Upišite API ključ i kliknite Spremi ključ.", "Spremno."])
+        self.assertEqual(self.app.status_var.get(), "Spremno.")
+
+    def test_a_first_launch_shows_how_to_start_and_a_run_clears_it(self):
+        self.assertIn("Kako započeti:", self.app.log.get("1.0", "end"))
+        self.app._reset_run_state()
+        self.assertNotIn("Kako započeti:", self.app.log.get("1.0", "end"))
+
+    def test_a_run_in_progress_keeps_its_status(self):
+        self.app.proc = mock.Mock()
+        self.app.status_var.set("Obrađujem a.jpg")
+        self.assertIsNone(self.app._refresh_readiness())
+        self.assertEqual(self.app.status_var.get(), "Obrađujem a.jpg")
+        self.app.proc = None
+
+    def test_an_unreadable_env_file_is_no_key_and_no_crash(self):
+        with mock.patch.object(grave_ui, "dotenv_values", side_effect=PermissionError("denied")), \
+                mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": ""}):
+            self.assertFalse(self.app._key_available())
+            self.assertEqual(self.app._resolve_api_key(), "")
+            root = tk.Tk()
+            root.withdraw()
+            self.addCleanup(root.destroy)
+            grave_ui.App(root)                       # the window still opens
 
 class SearchTests(AppCase):
     def fill(self):
