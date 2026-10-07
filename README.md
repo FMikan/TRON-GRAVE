@@ -28,7 +28,7 @@ Designed for digitizing Croatian cemetery records, with full support for Croatia
 - **Cost check** — when the estimate for the photos still to process is $2 or more, **Pokreni** shows the model, effort and estimate and asks before spending
 - **Ponovno obradi jačim modelom…** — re-runs just the `byhand/` photos with Claude Opus 5.5 at high effort, or your selected model/effort if stronger, into `byhand_retry/`; it asks before touching earlier retry results and can be resumed
 - **Automatic retries** — retries failed API calls with exponential backoff; the run stops (and can be resumed later) on a billing error, the monthly spend cap, or three API failures in a row
-- **Settings persistence** — remembers folders, model and effort; the API key is stored only when you click **Spremi**, in an owner-only file (`%APPDATA%\tron-grave` on Windows, `~/Library/Application Support/tron-grave` on macOS, `~/.config/tron-grave` on Linux — or `$XDG_CONFIG_HOME/tron-grave` when that is set)
+- **Settings persistence** — remembers folders, model and effort; the API key is stored only when you click **Spremi ključ** (or press Enter in the field), in an owner-only file (`%APPDATA%\tron-grave` on Windows, `~/Library/Application Support/tron-grave` on macOS, `~/.config/tron-grave` on Linux — or `$XDG_CONFIG_HOME/tron-grave` when that is set). **Prikaži** reveals the key, and when the field is empty a hint says whether a key from the environment or `.env` will be used
 - **Dry-run mode** — preview image discovery without making any API calls (the **Probni prolaz** button in the GUI, `--dry-run` on the CLI)
 - **Croatian & Cyrillic support** — outputs in Croatian with automatic Cyrillic transliteration
 - **Croatian GUI** — every label, dialog and status message
@@ -127,7 +127,7 @@ TRON-GRAVE uses the **Anthropic Claude API** to analyze tombstone images. You ne
 2. Add a payment method (pay-as-you-go — no subscription required)
 3. Navigate to **API Keys** in the left sidebar
 4. Click **Create Key**, give it a name, and copy the key
-5. Paste the key into the **API ključ** field of TRON-GRAVE and click **Spremi** (GUI), or into your `.env` file (CLI)
+5. Paste the key into the **API ključ** field of TRON-GRAVE and click **Spremi ključ** (GUI), or into your `.env` file (CLI)
 
 **Estimated cost per image** (pre-run preview shown in the GUI):
 
@@ -171,7 +171,7 @@ prompt that asks them to write out their reasoning; Sonnet 5 and Opus 5 keep it.
 1. Go to the [Releases](../../releases) page
 2. Download the latest `TRON-GRAVE.exe`
 3. Double-click to run — no Python or installation required. Windows may show *Windows protected your PC* for the downloaded exe (it is not code-signed): click **More info → Run anyway**.
-4. Paste your Anthropic API key into **API ključ** and click **Spremi**
+4. Paste your Anthropic API key into **API ključ** and click **Spremi ključ**
 5. (Optional) Pick a **Model** (Sonnet 5 is the default) and a **Napor** (effort) level
 6. Select your input folder (photos) and output folder, then click **▶ Pokreni**
 

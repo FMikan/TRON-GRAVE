@@ -187,6 +187,8 @@ class App:
         self._refresh_output_buttons()
         if self._refresh_readiness() != "Spremno.":     # the steps only while setup is incomplete
             self._append_log(ONBOARDING, "info")
+        self._refresh_key_hint()
+        self.api_key_var.trace_add("write", self._on_key_edit)
         # Last of all: the layout pass can map the window, and the folder checks above may wait on
         # a slow network share. Never narrower than the control row: the Croatian labels are long
         # and fonts differ per OS and DPI, so a fixed minimum cut off the last button, and at 175 %
@@ -350,29 +352,41 @@ class App:
             self._path_tips.append(Tooltip(entry, var.get, font=self._fonts["small"]))
 
         ttk.Label(top, text="API ključ").grid(row=2, column=0, sticky="w", padx=6, pady=6)
-        ttk.Entry(top, textvariable=self.api_key_var, show="•").grid(
-            row=2, column=1, sticky="ew", padx=6, pady=6
-        )
-        ttk.Button(top, text="Spremi", command=self._on_save_key).grid(row=2, column=2, padx=6, pady=6)
+        key_row = ttk.Frame(top)
+        key_row.grid(row=2, column=1, sticky="ew", padx=6, pady=6)
+        key_row.columnconfigure(0, weight=1)
+        self.ent_key = ttk.Entry(key_row, textvariable=self.api_key_var, show="•")
+        self.ent_key.grid(row=0, column=0, sticky="ew")
+        self.ent_key.bind("<Return>", lambda _e: self._on_save_key())
+        self.show_key_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(key_row, text="Prikaži", variable=self.show_key_var,
+                        command=self._toggle_key_visibility).grid(row=0, column=1, padx=(10, 0))
+        self.btn_save_key = ttk.Button(top, text="Spremi ključ", command=self._on_save_key)
+        self.btn_save_key.grid(row=2, column=2, padx=6, pady=6)
+        self.key_hint_var = tk.StringVar()
+        self._key_hint = ttk.Label(top, textvariable=self.key_hint_var, foreground=THEME["MUTED"],
+                                   font=self._fonts["small"])
+        self._key_hint.grid(row=3, column=1, sticky="w", padx=6, pady=(0, 4))
+        self._key_hint.grid_remove()
 
-        ttk.Label(top, text="Model").grid(row=3, column=0, sticky="w", padx=6, pady=6)
+        ttk.Label(top, text="Model").grid(row=4, column=0, sticky="w", padx=6, pady=6)
         self.model_combo = ttk.Combobox(
             top, textvariable=self.model_var, state="readonly", width=30,
             values=[ui_logic.MODEL_LABELS[m] for m in ui_logic.MODELS],
         )
-        self.model_combo.grid(row=3, column=1, sticky="w", padx=6, pady=6)
+        self.model_combo.grid(row=4, column=1, sticky="w", padx=6, pady=6)
         self.model_combo.bind("<<ComboboxSelected>>", self._on_model_change)
 
-        ttk.Label(top, text="Napor").grid(row=4, column=0, sticky="w", padx=6, pady=6)
+        ttk.Label(top, text="Napor").grid(row=5, column=0, sticky="w", padx=6, pady=6)
         self.effort_combo = ttk.Combobox(
             top, textvariable=self.effort_var, state="readonly", width=30,
         )
-        self.effort_combo.grid(row=4, column=1, sticky="w", padx=6, pady=6)
+        self.effort_combo.grid(row=5, column=1, sticky="w", padx=6, pady=6)
         self.effort_combo.bind("<<ComboboxSelected>>", self._on_effort_change)
         self._refresh_effort_options()
 
         self._preview_label = ttk.Label(top, textvariable=self.preview_var, foreground=THEME["MUTED"])
-        self._preview_label.grid(row=5, column=0, columnspan=3, sticky="ew", padx=6, pady=(2, 0))
+        self._preview_label.grid(row=6, column=0, columnspan=3, sticky="ew", padx=6, pady=(2, 0))
         top.bind("<Configure>", lambda e: self._preview_label.configure(
             wraplength=max(self._px(200), e.width - self._px(12))))
 
@@ -949,7 +963,35 @@ class App:
         return key
 
     def _key_available(self) -> bool:
-        return bool(self._resolve_api_key())
+        return bool(self.api_key_var.get().strip()) or self._key_source() is not None
+
+    def _key_source(self) -> str | None:
+        """Where a run's key comes from when the field is empty: "env", ".env" or None."""
+        if os.environ.get("ANTHROPIC_API_KEY", "").strip():
+            return "env"
+        try:
+            if (dotenv_values(PROJECT_DIR / ".env").get("ANTHROPIC_API_KEY") or "").strip():
+                return ".env"
+        except (OSError, ValueError):       # an unreadable .env holds no usable key
+            pass
+        return None
+
+    def _refresh_key_hint(self) -> None:
+        source = None if self.api_key_var.get().strip() else self._key_source()
+        text = {"env": "Koristi se ključ iz varijable okruženja ANTHROPIC_API_KEY.",
+                ".env": "Koristi se ključ iz datoteke .env."}.get(source, "")
+        self.key_hint_var.set(text)
+        if text:
+            self._key_hint.grid()
+        else:
+            self._key_hint.grid_remove()
+
+    def _on_key_edit(self, *_):
+        self._refresh_key_hint()
+        self._refresh_readiness()
+
+    def _toggle_key_visibility(self):
+        self.ent_key.configure(show="" if self.show_key_var.get() else "•")
 
     def _refresh_readiness(self) -> str | None:
         """While no run is in progress, the status line names the next setup step."""
@@ -1651,7 +1693,8 @@ class App:
 
     def _on_save_key(self):
         if self._save_settings(include_key=True):
-            self.status_var.set("Postavke i API ključ spremljeni.")
+            self.status_var.set("API ključ spremljen." if self.api_key_var.get().strip()
+                                else "API ključ uklonjen iz postavki.")
         else:
             messagebox.showerror("Ne mogu spremiti postavke", f"Ne mogu pisati u {SETTINGS_PATH}.")
 

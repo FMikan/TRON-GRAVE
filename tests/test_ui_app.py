@@ -113,6 +113,46 @@ class ApiKeyTests(AppCase):
             self.assertEqual(self.app._resolve_api_key(), "sk-typed")
 
 
+
+class ApiKeyUxTests(AppCase):
+    def test_prikazi_reveals_and_hides_the_key(self):
+        self.app.show_key_var.set(True)
+        self.app._toggle_key_visibility()
+        self.assertEqual(str(self.app.ent_key.cget("show")), "")
+        self.app.show_key_var.set(False)
+        self.app._toggle_key_visibility()
+        self.assertEqual(str(self.app.ent_key.cget("show")), "•")
+
+    def test_the_button_names_the_key_and_return_saves(self):
+        self.assertEqual(self.app.btn_save_key.cget("text"), "Spremi ključ")
+        self.assertTrue(self.app.ent_key.bind("<Return>"))
+
+    def test_an_empty_field_says_where_the_key_comes_from(self):
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-env"}):
+            self.app.api_key_var.set("")
+            self.assertEqual(self.app.key_hint_var.get(),
+                             "Koristi se ključ iz varijable okruženja ANTHROPIC_API_KEY.")
+        (self.tmp / ".env").write_text("ANTHROPIC_API_KEY=sk-file\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": ""}):
+            self.app._refresh_key_hint()
+            self.assertEqual(self.app.key_hint_var.get(), "Koristi se ključ iz datoteke .env.")
+            self.app.api_key_var.set("sk-typed")
+            self.assertEqual(self.app.key_hint_var.get(), "")
+            self.assertEqual(self.app._key_hint.winfo_manager(), "")
+
+    def test_an_unreadable_env_file_gives_no_hint_and_no_error(self):
+        with mock.patch.object(grave_ui, "dotenv_values", side_effect=PermissionError("denied")), \
+                mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": ""}):
+            self.app.api_key_var.set("")
+            self.assertIsNone(self.app._key_source())
+            self.assertEqual(self.app.key_hint_var.get(), "")
+        self.dialogs["showerror"].assert_not_called()
+
+    def test_saving_an_empty_field_says_the_key_was_removed(self):
+        self.app.api_key_var.set("")
+        self.app._on_save_key()
+        self.assertEqual(self.app.status_var.get(), "API ključ uklonjen iz postavki.")
+
 class RunCase(AppCase):
     """An App with an input folder of two photos, an output folder and a key."""
 

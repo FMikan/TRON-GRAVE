@@ -52,7 +52,7 @@ ANTHROPIC_API_KEY=your_api_key_here
 ```
 
 (You can skip this entirely if you use the desktop UI — enter the key in the **API ključ** field
-and click **Spremi**.)
+and click **Spremi ključ**.)
 
 ### 5. Run
 
