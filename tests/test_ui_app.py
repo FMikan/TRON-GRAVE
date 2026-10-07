@@ -4,6 +4,7 @@ import os
 import re
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 import unittest
 from pathlib import Path
 from tkinter import ttk
@@ -162,6 +163,31 @@ class ThemeTests(AppCase):
         source = Path(grave_ui.__file__).read_text(encoding="utf-8")
         after_palette = source.split("THEME = {", 1)[1].split("\n}\n", 1)[1]
         self.assertEqual(re.findall(r"""["']#[0-9a-fA-F]{6}["']""", after_palette), [])
+
+
+class FontTests(AppCase):
+    def test_windows_fonts_are_used_where_installed(self):
+        with mock.patch.object(grave_ui.tkfont, "families",
+                               return_value=("Segoe UI", "Segoe UI Semibold", "Consolas")):
+            fonts = self.app._pick_fonts()
+        self.assertEqual((fonts["body"], fonts["strong"], fonts["mono"], fonts["app"]),
+                         (("Segoe UI", 10), ("Segoe UI Semibold", 10), ("Consolas", 10),
+                          ("Segoe UI Semibold", 17)))
+
+    def test_elsewhere_the_headings_keep_their_weight(self):
+        with mock.patch.object(grave_ui.tkfont, "families", return_value=("DejaVu Sans",)):
+            fonts = self.app._pick_fonts()
+        default = tkfont.nametofont("TkDefaultFont", root=self.root).actual("family")
+        fixed = tkfont.nametofont("TkFixedFont", root=self.root).actual("family")
+        self.assertEqual(fonts["body"], (default, 10))
+        self.assertEqual(fonts["app"], (default, 17, "bold"))
+        self.assertEqual(fonts["mono"], (fixed, 10))
+
+    def test_no_font_is_named_outside_the_picker(self):
+        source = Path(grave_ui.__file__).read_text(encoding="utf-8")
+        picker = source.split("def _pick_fonts", 1)[1].split("\n    def ", 1)[0]
+        for name in ('"Segoe UI"', '"Segoe UI Semibold"', '"Consolas"'):
+            self.assertNotIn(name, source.replace(picker, ""))
 
 
 class LockAndDryRunTests(RunCase):

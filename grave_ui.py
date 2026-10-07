@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 import traceback
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -115,6 +116,7 @@ class App:
         self._settings: dict = {}
 
         self._load_settings()
+        self._fonts = self._pick_fonts()
         self._apply_theme()
         self._build_ui()
         self.root.report_callback_exception = self._report_callback_exception
@@ -143,6 +145,25 @@ class App:
 
     # ----- UI construction --------------------------------------------------
 
+    def _pick_fonts(self) -> dict:
+        """Segoe UI and Consolas where Windows has them, else Tk's own default and fixed fonts.
+
+        "Segoe UI Semibold" is its own family on Windows; elsewhere Tk would quietly swap in a
+        regular face, so the headings ask for bold instead.
+        """
+        families = set(tkfont.families(self.root))
+        ui = ("Segoe UI" if "Segoe UI" in families
+              else tkfont.nametofont("TkDefaultFont", root=self.root).actual("family"))
+        mono = ("Consolas" if "Consolas" in families
+                else tkfont.nametofont("TkFixedFont", root=self.root).actual("family"))
+        semibold = "Segoe UI Semibold" in families
+
+        def heading(size):
+            return ("Segoe UI Semibold", size) if semibold else (ui, size, "bold")
+
+        return {"body": (ui, 10), "small": (ui, 9), "mono": (mono, 10),
+                "strong": heading(10), "title": heading(13), "app": heading(17)}
+
     def _apply_theme(self):
         """Hand-crafted flat dark theme on the ttk 'clam' base — no extra dependencies."""
         t = THEME
@@ -155,7 +176,7 @@ class App:
         except tk.TclError:
             pass
 
-        base_font = ("Segoe UI", 10)
+        base_font = self._fonts["body"]
         style.configure(".", background=t["BG"], foreground=t["TEXT"], font=base_font,
                         fieldbackground=t["INPUT"], bordercolor=t["BORDER"],
                         lightcolor=t["BG"], darkcolor=t["BG"])
@@ -170,7 +191,7 @@ class App:
                   foreground=[("disabled", t["DISABLED_FG"])])
 
         style.configure("Accent.TButton", background=t["ACCENT"], foreground=t["ON_ACCENT"],
-                        borderwidth=0, padding=(16, 8), font=("Segoe UI Semibold", 10),
+                        borderwidth=0, padding=(16, 8), font=self._fonts["strong"],
                         focuscolor=t["ON_ACCENT"])
         style.map("Accent.TButton",
                   background=[("disabled", t["DISABLED_BG"]), ("pressed", t["ACCENT_DOWN"]),
@@ -216,12 +237,12 @@ class App:
 
         header = ttk.Frame(self.root)
         header.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 6))
-        ttk.Label(header, text="TRON-GRAVE", font=("Segoe UI Semibold", 17)).grid(
+        ttk.Label(header, text="TRON-GRAVE", font=self._fonts["app"]).grid(
             row=0, column=0, sticky="w"
         )
         ttk.Label(
             header, text="Izdvajanje podataka s nadgrobnih spomenika",
-            font=("Segoe UI", 9), foreground=THEME["MUTED"],
+            font=self._fonts["small"], foreground=THEME["MUTED"],
         ).grid(row=1, column=0, sticky="w")
 
         top = ttk.Frame(self.root)
@@ -321,7 +342,7 @@ class App:
         t = THEME
         self.log = tk.Text(
             log_frame, wrap="none", height=15, borderwidth=0, relief="flat",
-            font=("Consolas", 10), state="disabled",
+            font=self._fonts["mono"], state="disabled",
             background=t["LOG_BG"], foreground=t["TEXT"], insertbackground=t["TEXT"],
             selectbackground=t["SELECT"], highlightthickness=1,
             highlightbackground=t["BORDER"], highlightcolor=t["ACCENT"],
@@ -1045,7 +1066,7 @@ class App:
 
         frm = ttk.Frame(win, padding=16)
         frm.grid(row=0, column=0, sticky="nsew")
-        ttk.Label(frm, text=title, font=("Segoe UI Semibold", 13)).grid(
+        ttk.Label(frm, text=title, font=self._fonts["title"]).grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
         ttk.Label(frm, text=f"Ukupno: {total}   ·   OK: {ok}   ·   Za pregled: {partial}   ·   "
                             f"Neuspjelo: {failed}").grid(row=1, column=0, columnspan=2, sticky="w")
@@ -1054,7 +1075,7 @@ class App:
 
         row = 3
         if reasons:
-            ttk.Label(frm, text="Najčešći razlozi za pregled:", font=("Segoe UI Semibold", 10)).grid(
+            ttk.Label(frm, text="Najčešći razlozi za pregled:", font=self._fonts["strong"]).grid(
                 row=row, column=0, columnspan=2, sticky="w")
             row += 1
             for reason, count in reasons:
