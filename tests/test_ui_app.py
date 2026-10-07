@@ -245,6 +245,42 @@ class ChoiceDialogTests(AppCase):
     def test_no_yes_no_box_is_left(self):
         self.assertNotIn("askyesno", Path(grave_ui.__file__).read_text(encoding="utf-8"))
 
+
+class ScalingTests(AppCase):
+    def app_at(self, scale):
+        root = tk.Tk()
+        root.withdraw()
+        self.addCleanup(root.destroy)
+        with mock.patch.object(grave_ui.App, "_dpi_scale", return_value=scale):
+            return grave_ui.App(root)
+
+    def test_paddings_arrows_and_boxes_grow_with_the_display_scale(self):
+        app = self.app_at(1.75)
+        style = ttk.Style(app.root)
+        padding = [str(v) for v in app.root.tk.splitlist(style.lookup("TButton", "padding"))]
+        self.assertEqual(padding, ["24", "14"])
+        self.assertEqual(str(style.lookup("TProgressbar", "thickness")), "14")
+        self.assertEqual(str(style.lookup("TScrollbar", "arrowsize")), "24")
+        self.assertEqual(str(style.lookup("TCheckbutton", "indicatorsize")), "18")
+
+    def test_at_100_percent_the_sizes_are_tks_own(self):
+        style = ttk.Style(self.root)
+        self.assertEqual(str(style.lookup("TScrollbar", "arrowsize")), "14")
+        self.assertEqual(str(style.lookup("TCheckbutton", "indicatorsize")), "10")
+
+    def test_the_window_keeps_four_log_lines_at_its_smallest(self):
+        self.root.update_idletasks()
+        _width, min_height = self.root.minsize()
+        above = self.root.winfo_reqheight() - self.app.log.master.winfo_reqheight()
+        line = tkfont.Font(root=self.root, font=self.app.log.cget("font")).metrics("linespace")
+        self.assertGreaterEqual(min_height, above + 4 * line)
+
+    def test_the_preview_and_status_lines_wrap_instead_of_running_off(self):
+        self.app._preview_label.master.event_generate("<Configure>", width=600, height=80)
+        self.assertLessEqual(int(str(self.app._preview_label.cget("wraplength"))), 600)
+        self.app._status_label.master.event_generate("<Configure>", width=500, height=40)
+        self.assertLessEqual(int(str(self.app._status_label.cget("wraplength"))), 500)
+
 class FontTests(AppCase):
     def test_windows_fonts_are_used_where_installed(self):
         with mock.patch.object(grave_ui.tkfont, "families",

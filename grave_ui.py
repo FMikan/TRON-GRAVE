@@ -72,8 +72,9 @@ class App:
         # Wide enough for the full control row: Start/Stop, the dry-run checkbox, and the three
         # Open/Retry buttons. At 960 the last button was clipped off-screen. Scaled for DPI and
         # kept on screen.
+        self._scale = self._dpi_scale()
         width, height = ui_logic.scaled_geometry(
-            BASE_WIDTH, BASE_HEIGHT, self._dpi_scale(),
+            BASE_WIDTH, BASE_HEIGHT, self._scale,
             self.root.winfo_screenwidth(), self.root.winfo_screenheight(),
         )
         self.root.geometry(f"{width}x{height}")
@@ -130,9 +131,13 @@ class App:
         self._refresh_output_buttons()
         # Last of all: the layout pass can map the window, and the folder checks above may wait on
         # a slow network share. Never narrower than the control row: the Croatian labels are long
-        # and fonts differ per OS and DPI, so a fixed minimum cut off the last button.
+        # and fonts differ per OS and DPI, so a fixed minimum cut off the last button, and at 175 %
+        # a fixed height hid the buttons and the log: keep everything above the log plus 4 lines.
         self.root.update_idletasks()
-        self.root.minsize(max(900, self._ctrl.winfo_reqwidth() + 28), 460)
+        line = tkfont.Font(root=self.root, font=self.log.cget("font")).metrics("linespace")
+        above_log = self.root.winfo_reqheight() - self._log_frame.winfo_reqheight()
+        self.root.minsize(max(900, self._ctrl.winfo_reqwidth() + 28),
+                          above_log + 4 * line + self._hbar.winfo_reqheight())
 
     def _dpi_scale(self) -> float:
         """How much denser than 96 dpi the screen is (Windows, once DPI-aware); 1.0 elsewhere."""
@@ -142,6 +147,10 @@ class App:
             return max(1.0, self.root.winfo_fpixels("1i") / 96)
         except tk.TclError:
             return 1.0
+
+    def _px(self, n: int) -> int:
+        """n pixels at 96 dpi, in this display's pixels (Tk scales fonts, not pixel sizes)."""
+        return max(1, round(n * self._scale))
 
     # ----- UI construction --------------------------------------------------
 
@@ -185,13 +194,13 @@ class App:
         style.configure("TLabel", background=t["BG"], foreground=t["TEXT"], font=base_font)
 
         style.configure("TButton", background=t["INPUT"], foreground=t["TEXT"], borderwidth=0,
-                        padding=(14, 8), font=base_font, focuscolor=t["FOCUS"])
+                        padding=(self._px(14), self._px(8)), font=base_font, focuscolor=t["FOCUS"])
         style.map("TButton",
                   background=[("disabled", t["DISABLED_BG"]), ("pressed", t["BORDER"]), ("active", t["HOVER"])],
                   foreground=[("disabled", t["DISABLED_FG"])])
 
         style.configure("Accent.TButton", background=t["ACCENT"], foreground=t["ON_ACCENT"],
-                        borderwidth=0, padding=(16, 8), font=self._fonts["strong"],
+                        borderwidth=0, padding=(self._px(16), self._px(8)), font=self._fonts["strong"],
                         focuscolor=t["ON_ACCENT"])
         style.map("Accent.TButton",
                   background=[("disabled", t["DISABLED_BG"]), ("pressed", t["ACCENT_DOWN"]),
@@ -199,14 +208,15 @@ class App:
                   foreground=[("disabled", t["DISABLED_FG"])])
 
         style.configure("TEntry", fieldbackground=t["INPUT"], foreground=t["TEXT"],
-                        bordercolor=t["BORDER"], insertcolor=t["TEXT"], padding=6)
+                        bordercolor=t["BORDER"], insertcolor=t["TEXT"], padding=self._px(6))
         style.map("TEntry",
                   fieldbackground=[("readonly", t["INPUT"])],
                   foreground=[("readonly", t["TEXT"])],
                   bordercolor=[("focus", t["ACCENT"])])
 
         style.configure("TCombobox", fieldbackground=t["INPUT"], background=t["INPUT"],
-                        foreground=t["TEXT"], arrowcolor=t["TEXT"], bordercolor=t["BORDER"], padding=5)
+                        foreground=t["TEXT"], arrowcolor=t["TEXT"], bordercolor=t["BORDER"],
+                        padding=self._px(5), arrowsize=self._px(14))
         style.map("TCombobox",
                   fieldbackground=[("disabled", t["DISABLED_BG"]), ("readonly", t["INPUT"])],
                   foreground=[("disabled", t["DISABLED_FG"]), ("readonly", t["TEXT"])],
@@ -219,16 +229,18 @@ class App:
         self.root.option_add("*TCombobox*Listbox.selectForeground", t["ON_ACCENT"])
 
         style.configure("TCheckbutton", background=t["BG"], foreground=t["TEXT"], focuscolor=t["FOCUS"],
-                        indicatorbackground=t["INPUT"], indicatorforeground=t["TEXT"])
+                        indicatorbackground=t["INPUT"], indicatorforeground=t["TEXT"],
+                        indicatorsize=self._px(10))
         style.map("TCheckbutton", background=[("active", t["BG"])],
                   foreground=[("disabled", t["DISABLED_FG"])],
                   indicatorbackground=[("disabled", t["DISABLED_BG"]), ("selected", t["ACCENT"])])
 
         style.configure("TProgressbar", troughcolor=t["INPUT"], background=t["ACCENT"],
-                        bordercolor=t["BG"], lightcolor=t["ACCENT"], darkcolor=t["ACCENT"], thickness=8)
+                        bordercolor=t["BG"], lightcolor=t["ACCENT"], darkcolor=t["ACCENT"],
+                        thickness=self._px(8))
 
         style.configure("TScrollbar", troughcolor=t["BG"], background=t["INPUT"],
-                        bordercolor=t["BG"], arrowcolor=t["MUTED"])
+                        bordercolor=t["BG"], arrowcolor=t["MUTED"], arrowsize=self._px(14))
         style.map("TScrollbar", background=[("active", t["BORDER"])])
 
     def _build_ui(self):
@@ -285,9 +297,10 @@ class App:
         self.effort_combo.bind("<<ComboboxSelected>>", self._on_effort_change)
         self._refresh_effort_options()
 
-        ttk.Label(top, textvariable=self.preview_var, foreground=THEME["MUTED"]).grid(
-            row=5, column=0, columnspan=3, sticky="w", padx=6, pady=(2, 0)
-        )
+        self._preview_label = ttk.Label(top, textvariable=self.preview_var, foreground=THEME["MUTED"])
+        self._preview_label.grid(row=5, column=0, columnspan=3, sticky="ew", padx=6, pady=(2, 0))
+        top.bind("<Configure>", lambda e: self._preview_label.configure(
+            wraplength=max(self._px(200), e.width - self._px(12))))
 
         ctrl = ttk.Frame(self.root)
         ctrl.grid(row=2, column=0, sticky="ew", padx=14)
@@ -327,14 +340,16 @@ class App:
         prog.columnconfigure(0, weight=1)
         self.progress = ttk.Progressbar(prog, mode="determinate", maximum=100)
         self.progress.grid(row=0, column=0, columnspan=2, sticky="ew")
-        ttk.Label(prog, textvariable=self.status_var, foreground=THEME["MUTED"]).grid(
-            row=1, column=0, sticky="w", pady=(4, 0)
-        )
-        ttk.Label(prog, text=f"v{__version__}", foreground=THEME["MUTED"]).grid(
-            row=1, column=1, sticky="e", padx=(12, 0), pady=(4, 0)
-        )
+        self._status_label = ttk.Label(prog, textvariable=self.status_var, foreground=THEME["MUTED"])
+        self._status_label.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self._status_right = ttk.Frame(prog)       # Tehnički zapis, Traži… and the version
+        self._status_right.grid(row=1, column=1, sticky="ne", padx=(12, 0), pady=(4, 0))
+        ttk.Label(self._status_right, text=f"v{__version__}", foreground=THEME["MUTED"]).pack(side="right")
+        prog.bind("<Configure>", lambda e: self._status_label.configure(
+            wraplength=max(self._px(200), e.width - self._status_right.winfo_reqwidth() - self._px(24))))
 
         log_frame = ttk.Frame(self.root)
+        self._log_frame = log_frame
         log_frame.grid(row=4, column=0, sticky="nsew", padx=14, pady=(6, 12))
         log_frame.rowconfigure(0, weight=1)
         log_frame.columnconfigure(0, weight=1)
@@ -357,6 +372,7 @@ class App:
         vbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.log.yview)
         vbar.grid(row=0, column=1, sticky="ns")
         hbar = ttk.Scrollbar(log_frame, orient="horizontal", command=self.log.xview)
+        self._hbar = hbar
         hbar.grid(row=1, column=0, sticky="ew")
         self.log.configure(xscrollcommand=hbar.set, yscrollcommand=vbar.set)
 
