@@ -25,10 +25,10 @@ Designed for digitizing Croatian cemetery records, with full support for Croatia
 - **Real-time progress & live cost counter** — GUI shows progress bar, the photo being processed, ETA, and the *real* running API cost (computed from each response's actual token usage, not an estimate). The log reads in Croatian, coloured by verdict (OK / za pregled / neuspjelo); **Tehnički zapis** switches it to the extractor's own lines
 - **End-of-run summary** — a popup with OK / for-review / failed counts, the most common review reasons among this run's flagged photos, the total cost, and a button to open the CSV; the window comes back to the front (taskbar flash on Windows)
 - **Resume interrupted runs** — when the output folder already has an output.csv, **Pokreni** asks **Nastavi** (resume) / **Prepiši** (move output.csv, byhand/ and byhand_retry/ aside and start over) / **Odustani**; a resume never re-sends a photo the model already answered
-- **Ponovi byhand/** — re-runs just the `byhand/` photos with Claude Opus 5.5 at high effort, or your selected model/effort if stronger, into `byhand_retry/`; it asks before touching earlier retry results and can be resumed
+- **Ponovno obradi jačim modelom…** — re-runs just the `byhand/` photos with Claude Opus 5.5 at high effort, or your selected model/effort if stronger, into `byhand_retry/`; it asks before touching earlier retry results and can be resumed
 - **Automatic retries** — retries failed API calls with exponential backoff; the run stops (and can be resumed later) on a billing error, the monthly spend cap, or three API failures in a row
 - **Settings persistence** — remembers folders, model and effort; the API key is stored only when you click **Spremi**, in an owner-only file (`%APPDATA%\tron-grave` on Windows, `~/Library/Application Support/tron-grave` on macOS, `~/.config/tron-grave` on Linux — or `$XDG_CONFIG_HOME/tron-grave` when that is set)
-- **Dry-run mode** — preview image discovery without making any API calls (**Probni prolaz (samo popis)** in the GUI, `--dry-run` on the CLI)
+- **Dry-run mode** — preview image discovery without making any API calls (the **Probni prolaz** button in the GUI, `--dry-run` on the CLI)
 - **Croatian & Cyrillic support** — outputs in Croatian with automatic Cyrillic transliteration
 - **Croatian GUI** — every label, dialog and status message
 
@@ -95,9 +95,11 @@ photos whose API call failed — resume retries those)
 answered, whatever the verdict, so resume never pays for it twice. Rewritten by every fresh run.
 If it is missing while output.csv has rows, resume refuses to run rather than re-send everything.
 
-**`byhand_retry/`** — results of **Ponovi byhand/**, with its own `output.csv`, `.processed` and `byhand/`
+**`byhand_retry/`** — results of **Ponovno obradi jačim modelom…**, with its own `output.csv`, `.processed` and `byhand/`
 
 **`output.<time>.bak.csv`**, **`byhand.<time>.bak/`**, **`byhand_retry.<time>.bak/`** — what **Prepiši** (or `--overwrite` on the CLI) set aside (`<time>` is `YYYYMMDD-HHMMSS`)
+
+In the GUI, **Otvori** opens output.csv, the photos to review (`byhand/`), the retry results and the output folder.
 
 > There is no longer a separate `errors.txt`; all review information now lives in the `Notes` column.
 
@@ -148,7 +150,7 @@ end-of-run summary show the **real** cost, computed from each API response's act
 (including prompt-cache discounts) — not an estimate.
 
 All six offered models accept all five **effort** levels. The GUI always sends the level you pick in
-**Napor** (**Ponovi byhand/** raises a lower one to `high`); the CLI sends none unless you pass
+**Napor** (**Ponovno obradi jačim modelom…** raises a lower one to `high`); the CLI sends none unless you pass
 `--effort`, and the model then uses its own default. Higher levels (`high` → `xhigh` → `max`) make
 the model reason harder per image at higher token cost; drop to `low`/`medium` for cheaper, faster
 runs.
@@ -341,7 +343,7 @@ Three API failures in a row stop the run, and a resume starts with the same phot
 keeps failing with `greška API-ja` must be moved out of the input folder and handled by hand.
 
 **Retry hard images with a stronger model.** Whenever the output folder's `byhand/` has images and
-no run is in progress, the **Ponovi byhand/** button is available. It re-runs just those images
+no run is in progress, the **Ponovno obradi jačim modelom…** button is available. It re-runs just those images
 with Claude Opus 5.5 at `high` effort. If your selected model is stronger than Opus 5.5 (Fable 5,
 Fable 5.1) or your selected effort is higher than `high` (`xhigh`, `max`), that setting is kept
 instead, so a retry is never weaker than the run you chose. Before starting, it shows the model,
@@ -349,7 +351,7 @@ effort and an estimated cost and asks you to confirm. Results go into a separate
 subfolder (its own `output.csv`, `.processed` and, if anything is still unreadable, its own
 `byhand/`) — the original `output.csv` and `byhand/` are left untouched, so you can compare the two
 runs or merge the improved rows in by hand. A retry can be resumed like any run: if `byhand_retry/`
-already has an `output.csv`, **Ponovi byhand/** asks **Nastavi** / **Prepiši** / **Odustani** before
+already has an `output.csv`, **Ponovno obradi jačim modelom…** asks **Nastavi** / **Prepiši** / **Odustani** before
 touching it. While a retry runs, its `.tron-grave.lock` sits in `byhand_retry/`, and the app asks
 before using a folder that is already locked.
 

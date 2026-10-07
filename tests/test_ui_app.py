@@ -2,6 +2,7 @@ import ctypes
 import json
 import os
 import re
+import shutil
 import time
 import tkinter as tk
 import tkinter.font as tkfont
@@ -41,7 +42,9 @@ def all_widgets(root):
 class LabelTests(AppCase):
     def test_widgets_speak_croatian(self):
         self.assertEqual(self.app.btn_start.cget("text"), "▶  Pokreni")
-        self.assertEqual(self.app.btn_retry_byhand.cget("text"), "Ponovi byhand/")
+        self.assertEqual(self.app.btn_retry_byhand.cget("text"), grave_ui.RETRY_LABEL)
+        self.assertEqual(self.app.btn_dry.cget("text"), "Probni prolaz")
+        self.assertEqual(self.app.btn_open.cget("text"), "Otvori")
         self.assertEqual(self.app.status_var.get(), "Spremno.")
 
     def test_model_dropdown_shows_names_and_maps_back_to_ids(self):
@@ -361,15 +364,13 @@ class FontTests(AppCase):
 class LockAndDryRunTests(RunCase):
     def test_a_dry_run_needs_no_output_folder_and_takes_no_lock(self):
         self.app.output_var.set("")
-        self.app.dry_run_var.set(True)
-        self.app._on_start()
+        self.app._on_dry_run()
         self.assertIn("--dry-run", self.launched[-1])
         self.assertNotIn("--output", self.launched[-1])
         self.assertEqual(list(self.tmp.rglob(".tron-grave.lock")), [])
 
     def test_a_dry_run_leaves_a_chosen_output_folder_alone(self):
-        self.app.dry_run_var.set(True)
-        self.app._on_start()
+        self.app._on_dry_run()
         self.assertIn("--dry-run", self.launched[-1])
         self.assertNotIn("--output", self.launched[-1])
         self.assertFalse(self.out.exists())
@@ -404,7 +405,7 @@ class LaunchFailureTests(RunCase):
             self.app._on_start()                    # _set_running(True) greys the three buttons out
         self.assertEqual(self.app.status_var.get(), "Pokretanje nije uspjelo.")
         self.assertEqual([str(button.cget("state")) for button in (
-            self.app.btn_open_csv, self.app.btn_open_byhand, self.app.btn_retry_byhand)], ["normal"] * 3)
+            self.app.btn_open, self.app.btn_retry_byhand)], ["normal"] * 2)
 
 
 class ProgressTests(AppCase):
@@ -430,7 +431,7 @@ class ProgressTests(AppCase):
 
     def test_a_stopped_run_says_where_it_was_saved_and_how_to_carry_on(self):
         for retry, where, again in ((False, "output.csv", "Pokreni"),
-                                    (True, "byhand_retry/output.csv", "Ponovi byhand/")):
+                                    (True, "byhand_retry/output.csv", grave_ui.RETRY_LABEL)):
             with self.subTest(retry=retry):
                 self.app._reset_run_state()
                 self.app._is_retry_run = retry
@@ -923,7 +924,7 @@ class RetryTests(RunCase):
         self.app._on_retry_byhand()
         self.app._stop_requested = True
         self.app._on_proc_exit(130)
-        self.assertIn("Ponovi byhand/", self.dialogs["showinfo"].call_args[0][1])
+        self.assertIn(grave_ui.RETRY_LABEL, self.dialogs["showinfo"].call_args[0][1])
 
 
 class OutputButtonTests(AppCase):
@@ -933,21 +934,23 @@ class OutputButtonTests(AppCase):
         init_csv(out / "output.csv")
         return out
 
-    def open_states(self, app=None) -> tuple[str, str]:
+    def open_states(self, app=None) -> tuple[str, str, str]:
         app = app or self.app
-        return str(app.btn_open_csv.cget("state")), str(app.btn_open_byhand.cget("state"))
+        app._refresh_open_menu()
+        return (str(app.btn_open.cget("state")),
+                str(app.open_menu.entrycget(0, "state")), str(app.open_menu.entrycget(1, "state")))
 
     def test_the_open_buttons_follow_what_is_on_disk(self):
         self.app.output_var.set(str(self.results_on_disk()))
         self.app._refresh_output_buttons()
         self.app._on_model_change()                 # this used to disable them
-        self.assertEqual(self.open_states(), ("normal", "normal"))
+        self.assertEqual(self.open_states(), ("normal", "normal", "normal"))
 
     def test_the_open_buttons_survive_an_effort_change(self):
         self.app.output_var.set(str(self.results_on_disk()))
         self.app._refresh_output_buttons()
         self.app._on_effort_change()                # so did this, once the estimate learned from runs
-        self.assertEqual(self.open_states(), ("normal", "normal"))
+        self.assertEqual(self.open_states(), ("normal", "normal", "normal"))
 
     def test_the_open_buttons_are_right_from_the_first_moment(self):
         self.settings_path.parent.mkdir(parents=True)
@@ -955,7 +958,7 @@ class OutputButtonTests(AppCase):
         root = tk.Tk()
         root.withdraw()
         self.addCleanup(root.destroy)
-        self.assertEqual(self.open_states(grave_ui.App(root)), ("normal", "normal"))
+        self.assertEqual(self.open_states(grave_ui.App(root)), ("normal", "normal", "normal"))
 
     def test_picking_an_output_folder_sets_the_open_buttons_from_it(self):
         empty = self.tmp / "empty"
@@ -963,10 +966,10 @@ class OutputButtonTests(AppCase):
         pick = self._patch(grave_ui.filedialog, "askdirectory",
                            mock.Mock(return_value=str(self.results_on_disk())))
         self.app._pick_output()
-        self.assertEqual(self.open_states(), ("normal", "normal"))
+        self.assertEqual(self.open_states(), ("normal", "normal", "normal"))
         pick.return_value = str(empty)
         self.app._pick_output()
-        self.assertEqual(self.open_states(), ("disabled", "disabled"))
+        self.assertEqual(self.open_states(), ("normal", "disabled", "disabled"))
 
     def test_an_output_folder_that_cannot_be_checked_reads_as_empty(self):
         # Path.is_file()/is_dir() raise PermissionError on Python <= 3.12 for a path under an
@@ -976,7 +979,7 @@ class OutputButtonTests(AppCase):
         with mock.patch.object(Path, "is_file", side_effect=PermissionError(13, "denied")), \
                 mock.patch.object(Path, "is_dir", side_effect=PermissionError(13, "denied")):
             self.app._refresh_output_buttons()
-        self.assertEqual(self.open_states(), ("disabled", "disabled"))
+        self.assertEqual(self.open_states(), ("disabled", "disabled", "disabled"))
 
     def test_a_finished_run_draws_attention(self):
         self.app._reset_run_state()
@@ -993,6 +996,55 @@ class OutputButtonTests(AppCase):
                 self.app._on_proc_exit(rc)
                 self.assertEqual(self.app._draw_attention.call_count, 0 if dry else 1)
 
+
+
+class OpenMenuTests(AppCase):
+    def results_on_disk(self) -> Path:
+        out = self.tmp / "out"
+        (out / "byhand").mkdir(parents=True)
+        init_csv(out / "output.csv")
+        return out
+
+    def states(self):
+        self.app._refresh_open_menu()
+        return [str(self.app.open_menu.entrycget(i, "state")) for i in (0, 1, 2, 4)]
+
+    def test_each_entry_follows_the_disk_when_the_menu_opens(self):
+        out = self.results_on_disk()
+        self.app.output_var.set(str(out))
+        self.assertEqual(self.states(), ["normal", "normal", "disabled", "normal"])
+        (out / "byhand_retry").mkdir()
+        init_csv(out / "byhand_retry" / "output.csv")
+        self.assertEqual(self.states(), ["normal"] * 4)
+
+    def test_a_deleted_output_folder_disables_every_entry(self):
+        out = self.results_on_disk()
+        self.app.output_var.set(str(out))
+        shutil.rmtree(out)
+        self.assertEqual(self.states(), ["disabled"] * 4)
+
+    def test_the_entries_open_what_they_name(self):
+        out = self.results_on_disk()
+        (out / "byhand_retry").mkdir()
+        init_csv(out / "byhand_retry" / "output.csv")
+        self.app.output_var.set(str(out))
+        self.app._refresh_open_menu()
+        with mock.patch.object(grave_ui.App, "_open_path") as open_path:
+            for index in (0, 1, 2, 4):
+                self.app.open_menu.invoke(index)
+        self.assertEqual([c[0][0] for c in open_path.call_args_list],
+                         [out / "output.csv", out / "byhand", out / "byhand_retry" / "output.csv", out])
+
+    def test_the_menu_button_follows_the_output_folder(self):
+        self.app.output_var.set(str(self.results_on_disk()))
+        self.app._refresh_output_buttons()
+        self.assertEqual(str(self.app.btn_open.cget("state")), "normal")
+        self.app.output_var.set(str(self.tmp / "missing"))
+        self.app._refresh_output_buttons()
+        self.assertEqual(str(self.app.btn_open.cget("state")), "disabled")
+
+    def test_the_menu_button_shows_keyboard_focus(self):
+        self.assertEqual(ttk.Style(self.root).lookup("TMenubutton", "focuscolor"), grave_ui.THEME["FOCUS"])
 
 class SummaryTests(AppCase):
     def pending_timers(self) -> set[str]:
@@ -1249,8 +1301,8 @@ class CloseTests(AppCase):
                 mock.patch.object(self.root, "destroy"):
             self.app._on_close()
             self.app._on_proc_exit(130)               # the extractor is gone; the window goes on its next tick
-        for name in ("btn_start", "btn_in", "btn_out", "btn_open_csv", "btn_open_byhand", "btn_retry_byhand",
-                     "model_combo", "effort_combo", "chk_dry"):
+        for name in ("btn_start", "btn_in", "btn_out", "btn_open", "btn_dry", "btn_retry_byhand",
+                     "model_combo", "effort_combo"):
             with self.subTest(control=name):
                 self.assertEqual(str(getattr(self.app, name).cget("state")), "disabled")
 

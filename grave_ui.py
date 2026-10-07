@@ -64,6 +64,8 @@ THEME = {
     "INFO": "#79b8ff",
 }
 
+RETRY_LABEL = "Ponovno obradi jačim modelom…"
+
 
 class App:
     def __init__(self, root: tk.Tk):
@@ -84,7 +86,6 @@ class App:
         self.api_key_var = tk.StringVar()
         self.model_var = tk.StringVar(value=ui_logic.MODEL_LABELS[ui_logic.DEFAULT_MODEL])
         self.effort_var = tk.StringVar(value=ui_logic.EFFORT_LABELS[ui_logic.DEFAULT_EFFORT])
-        self.dry_run_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="Spremno.")
         self.preview_var = tk.StringVar(value="")
         self.search_var = tk.StringVar()
@@ -198,6 +199,12 @@ class App:
         style.map("TButton",
                   background=[("disabled", t["DISABLED_BG"]), ("pressed", t["BORDER"]), ("active", t["HOVER"])],
                   foreground=[("disabled", t["DISABLED_FG"])])
+
+        style.configure("TMenubutton", background=t["INPUT"], foreground=t["TEXT"], borderwidth=0,
+                        padding=(self._px(14), self._px(8)), arrowcolor=t["TEXT"], focuscolor=t["FOCUS"])
+        style.map("TMenubutton",
+                  background=[("disabled", t["DISABLED_BG"]), ("pressed", t["BORDER"]), ("active", t["HOVER"])],
+                  foreground=[("disabled", t["DISABLED_FG"])], arrowcolor=[("disabled", t["DISABLED_FG"])])
 
         style.configure("Accent.TButton", background=t["ACCENT"], foreground=t["ON_ACCENT"],
                         borderwidth=0, padding=(self._px(16), self._px(8)), font=self._fonts["strong"],
@@ -313,27 +320,27 @@ class App:
         self.btn_start.grid(row=0, column=0, padx=(0, 6), pady=4)
         self.btn_stop = ttk.Button(ctrl, text="Zaustavi", command=self._on_stop, state="disabled")
         self.btn_stop.grid(row=0, column=1, padx=6, pady=4)
-        self.chk_dry = ttk.Checkbutton(ctrl, text="Probni prolaz (samo popis)", variable=self.dry_run_var)
-        self.chk_dry.grid(row=0, column=2, padx=12)
+        self.btn_dry = ttk.Button(ctrl, text="Probni prolaz", command=self._on_dry_run)
+        self.btn_dry.grid(row=0, column=2, padx=6, pady=4)
 
-        self.btn_open_csv = ttk.Button(
-            ctrl, text="Otvori output.csv",
-            command=lambda: self._open_path(Path(self.output_var.get()) / "output.csv"),
-            state="disabled",
-        )
-        self.btn_open_csv.grid(row=0, column=4, padx=6)
-        self.btn_open_byhand = ttk.Button(
-            ctrl, text="Otvori byhand/",
-            command=lambda: self._open_path(Path(self.output_var.get()) / "byhand"),
-            state="disabled",
-        )
-        self.btn_open_byhand.grid(row=0, column=5, padx=6)
-        self.btn_retry_byhand = ttk.Button(
-            ctrl, text="Ponovi byhand/",
-            command=self._on_retry_byhand,
-            state="disabled",
-        )
-        self.btn_retry_byhand.grid(row=0, column=6, padx=(6, 0))
+        self.btn_open = ttk.Menubutton(ctrl, text="Otvori", state="disabled")
+        self.open_menu = tk.Menu(self.btn_open, tearoff=False, postcommand=self._refresh_open_menu,
+                                 background=THEME["SURFACE"], foreground=THEME["TEXT"],
+                                 activebackground=THEME["ACCENT"], activeforeground=THEME["ON_ACCENT"],
+                                 disabledforeground=THEME["DISABLED_FG"], borderwidth=0)
+        self.open_menu.add_command(label="output.csv",
+                                   command=lambda: self._open_path(self._out_path() / "output.csv"))
+        self.open_menu.add_command(label="Slike za pregled (byhand/)",
+                                   command=lambda: self._open_path(self._out_path() / "byhand"))
+        self.open_menu.add_command(label="Rezultati ponovne obrade (byhand_retry/output.csv)",
+                                   command=lambda: self._open_path(self._out_path() / "byhand_retry" / "output.csv"))
+        self.open_menu.add_separator()
+        self.open_menu.add_command(label="Izlazna mapa", command=lambda: self._open_path(self._out_path()))
+        self.btn_open.configure(menu=self.open_menu)
+        self.btn_open.grid(row=0, column=4, padx=6)
+        self.btn_retry_byhand = ttk.Button(ctrl, text=RETRY_LABEL, command=self._on_retry_byhand,
+                                           state="disabled")
+        self.btn_retry_byhand.grid(row=0, column=5, padx=(6, 0))
 
         prog = ttk.Frame(self.root)
         prog.grid(row=3, column=0, sticky="ew", padx=14, pady=8)
@@ -478,71 +485,93 @@ class App:
         self.preview_var.set(f"Pronađeno slika: {count}. Procjena: ~{self._fmt_duration(secs)}, "
                              f"~${cost:.2f} ({basis}).{heic_note}")
 
-    def _refresh_retry_button(self):
-        """Ground-truth check: enable "Ponovi byhand/" only if byhand/ actually has images."""
-        out = self.output_var.get()
-        if not out:
-            self.btn_retry_byhand.configure(state="disabled")
-            return
-        byhand = Path(out) / "byhand"
+    def _out_path(self) -> Path:
+        return Path(self.output_var.get())
+
+    @staticmethod
+    def _byhand_images(out_dir: Path) -> int:
+        """Photos waiting in out_dir/byhand (0 when there is none or it can't be read)."""
+        byhand = out_dir / "byhand"
         try:
-            has_images = byhand.is_dir() and any(
-                f.is_file() and is_supported_image(f) for f in byhand.iterdir()
-            )
+            if not byhand.is_dir():
+                return 0
+            return sum(1 for f in byhand.iterdir() if f.is_file() and is_supported_image(f))
         except OSError:
             # An unreadable output folder must not take the whole app down: this runs
             # from __init__, so an uncaught OSError here means the window never opens.
-            has_images = False
+            return 0
+
+    def _refresh_retry_button(self):
+        """Ground-truth check: enable the retry only if byhand/ actually has images."""
+        out = self.output_var.get()
+        has_images = bool(out) and self._byhand_images(Path(out)) > 0
         self.btn_retry_byhand.configure(state="normal" if has_images else "disabled")
 
     def _refresh_output_buttons(self):
-        """Enable Open and Retry from what is on disk, never from what the last click did."""
+        """Enable Otvori and the retry from what is on disk, never from what the last click did."""
         if self.proc is not None:
             return                      # a run is in progress; _set_running disabled them
         out = self.output_var.get()
-        base = Path(out) if out else None
-        # os.path.isfile/isdir never raise; Path.is_file/is_dir re-raise PermissionError on
-        # Python <= 3.12 for a folder under one it cannot enter, and this runs from __init__.
-        self.btn_open_csv.configure(
-            state="normal" if base and os.path.isfile(base / "output.csv") else "disabled")
-        self.btn_open_byhand.configure(
-            state="normal" if base and os.path.isdir(base / "byhand") else "disabled")
+        # os.path.isdir never raises; Path.is_dir re-raises PermissionError on Python <= 3.12
+        # for a folder under one it cannot enter, and this runs from __init__.
+        self.btn_open.configure(state="normal" if out and os.path.isdir(out) else "disabled")
         self._refresh_retry_button()
+
+    def _refresh_open_menu(self):
+        """Enable each Otvori entry from what is on disk when the menu opens."""
+        out = self.output_var.get()
+        base = Path(out) if out else None
+        checks = ((0, lambda b: os.path.isfile(b / "output.csv")),
+                  (1, lambda b: os.path.isdir(b / "byhand")),
+                  (2, lambda b: os.path.isfile(b / "byhand_retry" / "output.csv")),
+                  (4, os.path.isdir))
+        for index, exists in checks:
+            self.open_menu.entryconfigure(index, state="normal" if base and exists(base) else "disabled")
 
     # ----- start / stop / lifecycle -----------------------------------------
 
-    def _on_start(self):
+    def _checked_input(self) -> Path | None:
+        """The input folder when it exists and holds photos; otherwise say why and return None."""
         in_path = self.input_var.get().strip()
-        out_path = self.output_var.get().strip()
-        dry = self.dry_run_var.get()
-
-        if not in_path or not (out_path or dry):
-            messagebox.showwarning("Nedostaje mapa", "Odaberite ulaznu i izlaznu mapu.")
-            return
-
+        if not in_path:
+            messagebox.showwarning("Nedostaje mapa", "Odaberite ulaznu mapu.")
+            return None
         in_dir = Path(in_path)
         if not in_dir.is_dir():
             messagebox.showerror("Neispravna ulazna mapa", f"Ulazna mapa ne postoji:\n{in_dir}")
-            return
-
+            return None
         try:
             image_count = sum(1 for f in in_dir.iterdir() if f.is_file() and is_supported_image(f))
         except OSError as e:
             messagebox.showerror("Neispravna ulazna mapa", f"Ne mogu pročitati ulaznu mapu:\n{e}")
-            return
+            return None
         if image_count == 0:
             messagebox.showwarning(
                 "Nema slika",
                 f"{in_dir}\n\nnema podržanih slika (.jpg/.jpeg/.png/.webp).\n\n"
                 "Nema se što obraditi — HEIC/HEIF fotografije treba prvo pretvoriti u JPG.",
             )
+            return None
+        return in_dir
+
+    def _on_dry_run(self):
+        """Probni prolaz: list the photos a run would send. Needs only the input folder."""
+        in_dir = self._checked_input()
+        if in_dir is None:
             return
         self._save_settings()
+        self._launch_dry_run(in_dir)
 
-        # A dry run only lists the photos: no key, no output folder, no lock.
-        if dry:
-            self._launch_dry_run(in_dir)
+    def _on_start(self):
+        in_path = self.input_var.get().strip()
+        out_path = self.output_var.get().strip()
+        if not in_path or not out_path:
+            messagebox.showwarning("Nedostaje mapa", "Odaberite ulaznu i izlaznu mapu.")
             return
+        in_dir = self._checked_input()
+        if in_dir is None:
+            return
+        self._save_settings()
 
         api_key = self._resolve_api_key()
         if not api_key:
@@ -1076,7 +1105,7 @@ class App:
         self._release_lock()
         if not self._closing:
             # A closing window keeps every control off until it is gone: a click in its last
-            # 100 ms (Pokreni, or Ponovi byhand/ once the results are on disk) could launch a run.
+            # 100 ms (Pokreni, or the retry once the results are on disk) could launch a run.
             self._set_running(False)
             # The results exist whatever the exit code was; never leave them behind dead buttons.
             self._refresh_output_buttons()
@@ -1094,7 +1123,7 @@ class App:
         failed = self.counters["failed"]
         saved = ok + partial + failed
 
-        again = "Ponovi byhand/" if is_retry else "Pokreni"
+        again = RETRY_LABEL if is_retry else "Pokreni"
         where = "byhand_retry/output.csv" if is_retry else "output.csv"
         fatal = ui_logic.FATAL_TAG_RE.match(self._last_stderr)
         tag = fatal.group(1) if fatal else None
@@ -1196,11 +1225,7 @@ class App:
     def _on_retry_byhand(self):
         out_dir = Path(self.output_var.get())
         byhand_dir = out_dir / "byhand"
-        try:
-            n = (sum(1 for f in byhand_dir.iterdir() if f.is_file() and is_supported_image(f))
-                 if byhand_dir.is_dir() else 0)
-        except OSError:
-            n = 0
+        n = self._byhand_images(out_dir)
         if n == 0:
             messagebox.showinfo("Nema slika", "Nema slika u byhand/ za ponovnu obradu.")
             return
@@ -1294,12 +1319,11 @@ class App:
             self.btn_stop.configure(state="normal")
             self.btn_in.configure(state="disabled")
             self.btn_out.configure(state="disabled")
-            self.btn_open_csv.configure(state="disabled")
-            self.btn_open_byhand.configure(state="disabled")
+            self.btn_open.configure(state="disabled")
             self.btn_retry_byhand.configure(state="disabled")
             self.model_combo.configure(state="disabled")
             self.effort_combo.configure(state="disabled")
-            self.chk_dry.configure(state="disabled")
+            self.btn_dry.configure(state="disabled")
             self.status_var.set("Pokrećem…")
         else:
             self.btn_start.configure(state="normal")
@@ -1308,7 +1332,7 @@ class App:
             self.btn_out.configure(state="normal")
             self.model_combo.configure(state="readonly")
             self.effort_combo.configure(state="readonly")
-            self.chk_dry.configure(state="normal")
+            self.btn_dry.configure(state="normal")
 
     def _reset_run_state(self):
         self.counters = {"ok": 0, "partial": 0, "failed": 0}

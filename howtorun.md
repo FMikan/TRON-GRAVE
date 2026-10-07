@@ -199,7 +199,7 @@ Results are written to the `--output` folder:
 | `output.csv` | Extracted burial records (UTF-8 with BOM, Excel-compatible); the `File` column names the photo each row came from |
 | `byhand/` | Copies of images needing manual review — anything PARTIAL or FAILED, except photos whose API call failed (a resume retries those) |
 | `.processed` | Photos already answered; used by resume |
-| `byhand_retry/` | Results of **Ponovi byhand/** (own `output.csv`, `.processed` and `byhand/`) |
+| `byhand_retry/` | Results of **Ponovno obradi jačim modelom…** (own `output.csv`, `.processed` and `byhand/`) |
 
 Anything that needs attention is explained in the CSV's `Notes` column; there is no separate
 `errors.txt`.
