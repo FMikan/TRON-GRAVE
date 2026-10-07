@@ -15,6 +15,16 @@ from tests.helpers import jpeg_bytes
 from tests.ui_harness import REAL_DRAW_ATTENTION, REAL_LAUNCH_SUBPROCESS, REAL_SHOW_SUMMARY, AppCase
 
 
+def contrast(fg: str, bg: str) -> float:
+    """WCAG contrast ratio of two #rrggbb colours."""
+    def luminance(colour):
+        channels = [int(colour[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        r, g, b = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    high, low = sorted((luminance(fg), luminance(bg)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
 class LabelTests(AppCase):
     def test_widgets_speak_croatian(self):
         self.assertEqual(self.app.btn_start.cget("text"), "▶  Pokreni")
@@ -103,6 +113,25 @@ class RunCase(AppCase):
 
     def lock(self):
         return self.out / ".tron-grave.lock"
+
+
+class ThemeTests(AppCase):
+    def test_the_main_button_text_passes_wcag_aa_in_every_state(self):
+        t = grave_ui.THEME
+        for state in ("ACCENT", "ACCENT_HOVER", "ACCENT_DOWN"):
+            with self.subTest(state=state):
+                self.assertGreaterEqual(contrast(t["ON_ACCENT"], t[state]), 4.5)
+
+    def test_keyboard_focus_shows_on_buttons_and_checkboxes(self):
+        style = ttk.Style(self.root)
+        t = grave_ui.THEME
+        self.assertEqual(style.lookup("TButton", "focuscolor"), t["FOCUS"])
+        self.assertEqual(style.lookup("TCheckbutton", "focuscolor"), t["FOCUS"])
+        self.assertEqual(style.lookup("Accent.TButton", "focuscolor"), t["ON_ACCENT"])
+        # WCAG 1.4.11: a focus ring needs 3:1 against what it is drawn on
+        self.assertGreaterEqual(contrast(t["FOCUS"], t["INPUT"]), 3.0)
+        self.assertGreaterEqual(contrast(t["FOCUS"], t["BG"]), 3.0)
+        self.assertGreaterEqual(contrast(t["ON_ACCENT"], t["ACCENT"]), 3.0)
 
 
 class LockAndDryRunTests(RunCase):

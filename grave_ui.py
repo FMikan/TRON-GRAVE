@@ -37,6 +37,32 @@ DRAIN_CAP_PER_TICK = 200
 MAX_LINE_CHARS = 4096
 BASE_WIDTH, BASE_HEIGHT = 1180, 700
 
+# Every colour the window uses. White text on ACCENT is 4.7:1 and FOCUS is 6.5:1 against a button,
+# so the main button and the focus ring both pass WCAG AA.
+THEME = {
+    "BG": "#16181d",            # window background
+    "SURFACE": "#1e2127",       # popups, dropdown lists, tooltips
+    "INPUT": "#2a2e37",         # entries, buttons, troughs
+    "TEXT": "#e6e6e6",
+    "MUTED": "#9aa0a6",
+    "BORDER": "#333945",
+    "ACCENT": "#3b6fd8",
+    "ACCENT_HOVER": "#2f62cc",
+    "ACCENT_DOWN": "#2a57b5",
+    "ON_ACCENT": "#ffffff",
+    "HOVER": "#343a45",
+    "DISABLED_BG": "#23262d",
+    "DISABLED_FG": "#5b606b",
+    "FOCUS": "#8fb3ff",
+    "LOG_BG": "#15171c",
+    "SELECT": "#3a4a6b",
+    "SEARCH": "#4a3a00",
+    "OK": "#7ee787",
+    "WARN": "#e3b341",
+    "ERR": "#ff7b72",
+    "INFO": "#79b8ff",
+}
+
 
 class App:
     def __init__(self, root: tk.Tk):
@@ -119,21 +145,9 @@ class App:
 
     def _apply_theme(self):
         """Hand-crafted flat dark theme on the ttk 'clam' base — no extra dependencies."""
-        BG = "#16181d"          # window background
-        SURFACE = "#1e2127"     # popups / dropdown list
-        INPUT = "#2a2e37"       # entries, buttons, troughs
-        TEXT = "#e6e6e6"
-        MUTED = "#9aa0a6"
-        BORDER = "#333945"
-        ACCENT = "#5b8def"
-        ACCENT_HOVER = "#6f9bf2"
-        ACCENT_DOWN = "#4a7ce0"
-        HOVER = "#343a45"
-        DISABLED_BG = "#23262d"
-        DISABLED_FG = "#5b606b"
-
-        self._bg = BG
-        self.root.configure(background=BG)
+        t = THEME
+        self._bg = t["BG"]
+        self.root.configure(background=t["BG"])
 
         style = ttk.Style(self.root)
         try:
@@ -142,54 +156,56 @@ class App:
             pass
 
         base_font = ("Segoe UI", 10)
-        style.configure(".", background=BG, foreground=TEXT, font=base_font,
-                        fieldbackground=INPUT, bordercolor=BORDER,
-                        lightcolor=BG, darkcolor=BG)
+        style.configure(".", background=t["BG"], foreground=t["TEXT"], font=base_font,
+                        fieldbackground=t["INPUT"], bordercolor=t["BORDER"],
+                        lightcolor=t["BG"], darkcolor=t["BG"])
 
-        style.configure("TFrame", background=BG)
-        style.configure("TLabel", background=BG, foreground=TEXT, font=base_font)
+        style.configure("TFrame", background=t["BG"])
+        style.configure("TLabel", background=t["BG"], foreground=t["TEXT"], font=base_font)
 
-        style.configure("TButton", background=INPUT, foreground=TEXT,
-                        borderwidth=0, padding=(14, 8), font=base_font)
+        style.configure("TButton", background=t["INPUT"], foreground=t["TEXT"], borderwidth=0,
+                        padding=(14, 8), font=base_font, focuscolor=t["FOCUS"])
         style.map("TButton",
-                  background=[("disabled", DISABLED_BG), ("pressed", BORDER), ("active", HOVER)],
-                  foreground=[("disabled", DISABLED_FG)])
+                  background=[("disabled", t["DISABLED_BG"]), ("pressed", t["BORDER"]), ("active", t["HOVER"])],
+                  foreground=[("disabled", t["DISABLED_FG"])])
 
-        style.configure("Accent.TButton", background=ACCENT, foreground="#ffffff",
-                        borderwidth=0, padding=(16, 8), font=("Segoe UI Semibold", 10))
+        style.configure("Accent.TButton", background=t["ACCENT"], foreground=t["ON_ACCENT"],
+                        borderwidth=0, padding=(16, 8), font=("Segoe UI Semibold", 10),
+                        focuscolor=t["ON_ACCENT"])
         style.map("Accent.TButton",
-                  background=[("disabled", DISABLED_BG), ("pressed", ACCENT_DOWN), ("active", ACCENT_HOVER)],
-                  foreground=[("disabled", DISABLED_FG)])
+                  background=[("disabled", t["DISABLED_BG"]), ("pressed", t["ACCENT_DOWN"]),
+                              ("active", t["ACCENT_HOVER"])],
+                  foreground=[("disabled", t["DISABLED_FG"])])
 
-        style.configure("TEntry", fieldbackground=INPUT, foreground=TEXT,
-                        bordercolor=BORDER, insertcolor=TEXT, padding=6)
+        style.configure("TEntry", fieldbackground=t["INPUT"], foreground=t["TEXT"],
+                        bordercolor=t["BORDER"], insertcolor=t["TEXT"], padding=6)
         style.map("TEntry",
-                  fieldbackground=[("readonly", INPUT)],
-                  foreground=[("readonly", TEXT)],
-                  bordercolor=[("focus", ACCENT)])
+                  fieldbackground=[("readonly", t["INPUT"])],
+                  foreground=[("readonly", t["TEXT"])],
+                  bordercolor=[("focus", t["ACCENT"])])
 
-        style.configure("TCombobox", fieldbackground=INPUT, background=INPUT,
-                        foreground=TEXT, arrowcolor=TEXT, bordercolor=BORDER, padding=5)
+        style.configure("TCombobox", fieldbackground=t["INPUT"], background=t["INPUT"],
+                        foreground=t["TEXT"], arrowcolor=t["TEXT"], bordercolor=t["BORDER"], padding=5)
         style.map("TCombobox",
-                  fieldbackground=[("disabled", DISABLED_BG), ("readonly", INPUT)],
-                  foreground=[("disabled", DISABLED_FG), ("readonly", TEXT)],
-                  background=[("disabled", DISABLED_BG), ("pressed", HOVER), ("active", HOVER)],
-                  bordercolor=[("focus", ACCENT)],
-                  arrowcolor=[("disabled", DISABLED_FG)])
-        self.root.option_add("*TCombobox*Listbox.background", SURFACE)
-        self.root.option_add("*TCombobox*Listbox.foreground", TEXT)
-        self.root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
-        self.root.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
+                  fieldbackground=[("disabled", t["DISABLED_BG"]), ("readonly", t["INPUT"])],
+                  foreground=[("disabled", t["DISABLED_FG"]), ("readonly", t["TEXT"])],
+                  background=[("disabled", t["DISABLED_BG"]), ("pressed", t["HOVER"]), ("active", t["HOVER"])],
+                  bordercolor=[("focus", t["ACCENT"])],
+                  arrowcolor=[("disabled", t["DISABLED_FG"])])
+        self.root.option_add("*TCombobox*Listbox.background", t["SURFACE"])
+        self.root.option_add("*TCombobox*Listbox.foreground", t["TEXT"])
+        self.root.option_add("*TCombobox*Listbox.selectBackground", t["ACCENT"])
+        self.root.option_add("*TCombobox*Listbox.selectForeground", t["ON_ACCENT"])
 
-        style.configure("TCheckbutton", background=BG, foreground=TEXT)
-        style.map("TCheckbutton", background=[("active", BG)], foreground=[("disabled", DISABLED_FG)])
+        style.configure("TCheckbutton", background=t["BG"], foreground=t["TEXT"], focuscolor=t["FOCUS"])
+        style.map("TCheckbutton", background=[("active", t["BG"])], foreground=[("disabled", t["DISABLED_FG"])])
 
-        style.configure("TProgressbar", troughcolor=INPUT, background=ACCENT,
-                        bordercolor=BG, lightcolor=ACCENT, darkcolor=ACCENT, thickness=8)
+        style.configure("TProgressbar", troughcolor=t["INPUT"], background=t["ACCENT"],
+                        bordercolor=t["BG"], lightcolor=t["ACCENT"], darkcolor=t["ACCENT"], thickness=8)
 
-        style.configure("TScrollbar", troughcolor=BG, background=INPUT,
-                        bordercolor=BG, arrowcolor=MUTED)
-        style.map("TScrollbar", background=[("active", BORDER)])
+        style.configure("TScrollbar", troughcolor=t["BG"], background=t["INPUT"],
+                        bordercolor=t["BG"], arrowcolor=t["MUTED"])
+        style.map("TScrollbar", background=[("active", t["BORDER"])])
 
     def _build_ui(self):
         self.root.columnconfigure(0, weight=1)
