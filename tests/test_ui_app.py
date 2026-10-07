@@ -1176,6 +1176,18 @@ class ReadinessTests(AppCase):
             grave_ui.App(root)                       # the window still opens
 
 
+
+class IconTests(AppCase):
+    def test_the_window_gets_the_app_icon(self):
+        with mock.patch.object(self.root, "iconphoto") as iconphoto:
+            self.app._set_icon()
+        iconphoto.assert_called_once_with(True, self.app._icon)
+        self.assertEqual((self.app._icon.width(), self.app._icon.height()), (256, 256))
+
+    def test_a_missing_icon_file_is_not_an_error(self):
+        with mock.patch.object(grave_ui, "ICON_PATH", self.tmp / "none.png"):
+            self.app._set_icon()
+
 class PathFieldTests(AppCase):
     def test_a_long_path_scrolls_to_its_folder_name(self):
         self.app.input_var.set(str(self.tmp / ("dugi_naziv_" * 20) / "Groblje Sv. Marka"))

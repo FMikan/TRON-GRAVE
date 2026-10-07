@@ -26,11 +26,14 @@ from _version import __version__
 if getattr(sys, "frozen", False):
     # Running as PyInstaller bundle — exe lives next to all bundled files
     PROJECT_DIR = Path(sys.executable).parent
+    RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", PROJECT_DIR))    # the one-file exe's unpacked folder
     _EXTRACTOR_CMD = [sys.executable, "--_run-extractor"]
 else:
     PROJECT_DIR = Path(__file__).resolve().parent
+    RESOURCE_DIR = PROJECT_DIR
     _EXTRACTOR_CMD = [sys.executable, "-u", str(Path(__file__).resolve().parent / "grave_extractor.py")]
 SETTINGS_PATH = ui_logic.settings_path()
+ICON_PATH = RESOURCE_DIR / "assets" / "tron-grave.png"
 
 LOG_LINE_CAP = 10_000          # both views of the log are kept
 LOG_TRIM_BATCH = 1_000
@@ -129,6 +132,7 @@ class App:
             self.root.winfo_screenwidth(), self.root.winfo_screenheight(),
         )
         self.root.geometry(f"{width}x{height}")
+        self._set_icon()
 
         self.input_var = tk.StringVar()
         self.output_var = tk.StringVar()
@@ -192,6 +196,14 @@ class App:
         above_log = self.root.winfo_reqheight() - self._log_frame.winfo_reqheight()
         self.root.minsize(max(900, self._ctrl.winfo_reqwidth() + 28),
                           above_log + 4 * line + self._hbar.winfo_reqheight())
+
+    def _set_icon(self):
+        """The headstone in the title bar and the taskbar instead of Tk's feather."""
+        try:
+            self._icon = tk.PhotoImage(master=self.root, file=str(ICON_PATH))
+            self.root.iconphoto(True, self._icon)
+        except tk.TclError:
+            pass        # a missing or unreadable icon must not keep the window from opening
 
     def _dpi_scale(self) -> float:
         """How much denser than 96 dpi the screen is (Windows, once DPI-aware); 1.0 elsewhere."""

@@ -369,6 +369,8 @@ TRON-GRAVE/
 ├── ui_logic.py             # Tk-free GUI helpers (models, settings, estimates, texts)
 ├── grave_extractor.py      # CLI batch processor
 ├── _version.py             # Single source of the version string
+├── assets/                 # App icon (window and exe)
+├── tools/make_icon.py      # Draws the icon
 ├── extractor/
 │   ├── image_processor.py  # Claude Vision API integration + result classification
 │   ├── csv_writer.py       # CSV output (UTF-8 with BOM)
@@ -422,7 +424,8 @@ pip install "pyinstaller>=6.9"
 pyinstaller TRON-GRAVE.spec
 ```
 
-Either way the executable lands in `dist/TRON-GRAVE.exe`.
+Either way the executable lands in `dist/TRON-GRAVE.exe`. It gets the icon in `assets/` and Windows
+version details from `_version.py`.
 
 ---
 
