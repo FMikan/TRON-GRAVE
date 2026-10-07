@@ -146,6 +146,130 @@ COST_RE = re.compile(r"\(total: \$([0-9.]+)\)$")
 DONE_RE = re.compile(r"^Done\. \d+ images processed")
 
 
+# ---- the log in Croatian -------------------------------------------------------------------
+
+RESULT_LINE_RE = re.compile(r"^\[(\d+)/(\d+)\] (OK|PARTIAL|FAILED): (.*)$")
+COST_SUFFIX_RE = re.compile(r" — \$([0-9.]+) \(total: \$[0-9.]+\)$")
+_RECORDS_RE = re.compile(r"^(\d+) records?$")
+_DONE_LINE_RE = re.compile(r"^Done\. (\d+) images processed\. (\d+) succeeded, (\d+) partial, (\d+) failed\.$")
+_TOTAL_RE = re.compile(r"^Total cost: \$([0-9.]+)$")
+_OUTPUT_RE = re.compile(r"^Output:\s+(.+)$")
+_REVIEW_RE = re.compile(r"^Review:\s+(.+) \((\d+) images\)$")
+_RESUME_RE = re.compile(r"^Resume: skipping (\d+) already-processed image\(s\)\.$")
+_UNEXPECTED_RE = re.compile(r"^[A-Z]\w*(Error|Exception): ")
+VERDICTS_HR = {"OK": ("OK", "ok"), "PARTIAL": ("ZA PREGLED", "review"), "FAILED": ("NEUSPJELO", "failed")}
+API_FAILURE_HR = "greška API-ja (nije naplaćeno)"
+_REASONS_HR = {
+    "Name or surname could not be read": "nečitko ime ili prezime",
+    "Model not certain whether a year of birth or death exists": "nesigurna godina rođenja ili smrti",
+    "Birth year is after death year": "provjeri godine (rođenje nakon smrti)",
+    "Nearby markers may belong to this grave and were left out": "provjeri: možda više oznaka",
+    "Model declined to answer (refusal)": "odbijeno",
+    "All fields illegible": "sve nečitko",
+    "Model returned no records": "nema podataka",
+    "output.csv is locked": "output.csv je zaključan",
+}
+_REASON_PREFIXES_HR = (
+    ("Model reported a problem: ", "model javlja: {}"),
+    ("Response hit the max_tokens ceiling", "odgovor prekinut"),
+    ("Model returned no valid JSON answer", "neispravan odgovor"),
+    ("File could not be read or decoded", "ne mogu otvoriti datoteku"),
+    ("API call failed after retries", API_FAILURE_HR),
+    ("Error code: ", API_FAILURE_HR),
+    ("Connection error", API_FAILURE_HR),
+)
+_WARNINGS_HR = (
+    (re.compile(r"^warning: skipping (\d+) \.heic/\.heif file\(s\)"),
+     "Upozorenje: preskočeno HEIC/HEIF datoteka: {0} — pretvorite ih u JPG."),
+    (re.compile(r"^warning: .*output\.csv is locked"),
+     "Upozorenje: output.csv je zaključan (otvoren u Excelu?) — zatvorite ga; pokušavam još 30 s."),
+    (re.compile(r"^warning: could not copy (.+) to byhand/"), "Upozorenje: ne mogu kopirati {0} u byhand/."),
+    (re.compile(r"^warning: could not remove (.+) from byhand/"), "Upozorenje: ne mogu ukloniti {0} iz byhand/."),
+    (re.compile(r"^warning: no price table entry for (\S+);"),
+     "Upozorenje: model {0} nema cijenu u tablici — prikazani trošak je procjena."),
+)
+
+
+def plural_hr(n: int, one: str, few: str, many: str) -> str:
+    """The Croatian form for n: 1 and 21 take `one`, 2–4 and 22–24 `few`, the rest (11–14 too) `many`."""
+    if n % 10 == 1 and n % 100 != 11:
+        return one
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return few
+    return many
+
+
+def reason_hr(reason: str) -> str:
+    """The extractor's English reason in the CSV's Croatian words; the model's own text unchanged."""
+    if reason in _REASONS_HR:
+        return _REASONS_HR[reason]
+    for prefix, text in _REASON_PREFIXES_HR:
+        if reason.startswith(prefix):
+            return text.format(reason[len(prefix):])
+    if _UNEXPECTED_RE.match(reason):
+        return "neočekivana greška (pojedinosti u tehničkom zapisu)"
+    return reason
+
+
+def describe_line(kind: str, line: str, files: dict[int, str]):
+    """The default log view's line for one extractor line.
+
+    None: show the raw line in both views. ("", None): technical view only.
+    (text, tag): this Croatian text in the default view, the raw line in the technical one.
+    `files` maps k to the file named by its "[k/N] Processing" line, so splitting the reason off
+    a result line is exact even when the name holds parentheses.
+    """
+    text = line.rstrip("\r\n")
+    if kind == "stderr":
+        m = FATAL_TAG_RE.match(text)
+        if m:
+            return f"Greška: {FATAL_EXPLANATIONS.get(m.group(1), text[m.end():])}", "error"
+        if text.startswith("error: "):
+            return f"Greška: {text[len('error: '):]}", "error"
+        for pattern, template in _WARNINGS_HR:
+            m = pattern.match(text)
+            if m:
+                return template.format(*m.groups()), "warn"
+        return None
+    if START_RE.match(text):
+        return "", None
+    m = RESULT_LINE_RE.match(text)
+    if m:
+        k, total, verdict, rest = int(m.group(1)), int(m.group(2)), m.group(3), m.group(4)
+        name = files.get(k)
+        cost = COST_SUFFIX_RE.search(rest)
+        body = rest[:cost.start()] if cost else rest
+        if not name or not body.startswith(name + " (") or not body.endswith(")"):
+            return None
+        inner = body[len(name) + 2:-1]
+        label, tag = VERDICTS_HR[verdict]
+        records = _RECORDS_RE.match(inner) if verdict == "OK" else None
+        if records:
+            n = int(records.group(1))
+            detail = f"{n} {plural_hr(n, 'osoba', 'osobe', 'osoba')}"
+        else:
+            detail = reason_hr(inner)
+        price = f" · ${cost.group(1)}" if cost else ""
+        return f"[{k}/{total}] {label:<10} {name} · {detail}{price}", tag
+    m = _DONE_LINE_RE.match(text)
+    if m:
+        n, ok, partial, failed = m.groups()
+        return f"Gotovo. Obrađeno slika: {n} (OK: {ok}, za pregled: {partial}, neuspjelo: {failed}).", "done"
+    m = _TOTAL_RE.match(text)
+    if m:
+        return f"Ukupni trošak: ${m.group(1)}", "done"
+    m = _REVIEW_RE.match(text)
+    if m:
+        return f"Za pregled: {m.group(1)} (slika: {m.group(2)})", "info"
+    m = _OUTPUT_RE.match(text)
+    if m:
+        return f"Rezultati: {m.group(1)}", "info"
+    m = _RESUME_RE.match(text)
+    if m:
+        return f"Nastavak: preskačem već obrađene slike ({m.group(1)}).", "info"
+    return None
+
+
 def parse_progress(line: str):
     """("start", k, n, filename), ("result", k, n, verdict, total cost or None), or None."""
     line = line.rstrip("\r\n")

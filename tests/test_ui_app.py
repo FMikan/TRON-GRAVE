@@ -281,6 +281,58 @@ class ScalingTests(AppCase):
         self.app._status_label.master.event_generate("<Configure>", width=500, height=40)
         self.assertLessEqual(int(str(self.app._status_label.cget("wraplength"))), 500)
 
+
+class LogViewTests(AppCase):
+    def feed(self, *lines, kind="stdout"):
+        for line in lines:
+            self.app._handle_line(kind, line + "\n")
+
+    def visible(self) -> str:
+        return self.app.log.tk.call(self.app.log._w, "get", "-displaychars", "1.0", "end")
+
+    def test_the_default_view_reads_in_croatian(self):
+        self.app._reset_run_state()
+        self.feed("[1/2] Processing a.jpg ...", "[1/2] OK: a.jpg (1 record) — $0.0200 (total: $0.02)",
+                  "[2/2] Processing b.jpg ...",
+                  "[2/2] PARTIAL: b.jpg (Name or surname could not be read) — $0.0100 (total: $0.03)")
+        text = self.visible()
+        self.assertIn("[1/2] OK         a.jpg · 1 osoba · $0.0200", text)
+        self.assertIn("[2/2] ZA PREGLED b.jpg · nečitko ime ili prezime · $0.0100", text)
+        self.assertNotIn("Processing", text)
+        self.assertNotIn("Name or surname", text)
+
+    def test_tehnicki_zapis_shows_the_extractors_own_lines_instead(self):
+        self.app._reset_run_state()
+        self.feed("[1/1] Processing a.jpg ...", "[1/1] OK: a.jpg (1 record) — $0.0200 (total: $0.02)")
+        self.app.raw_log_var.set(True)
+        self.app._toggle_raw_log()
+        text = self.visible()
+        self.assertIn("[1/1] Processing a.jpg ...", text)
+        self.assertNotIn("osoba", text)
+
+    def test_each_verdict_and_warning_has_its_colour(self):
+        self.app._reset_run_state()
+        self.feed("[1/3] Processing a.jpg ...", "[1/3] OK: a.jpg (1 record) — $0.0200 (total: $0.02)",
+                  "[2/3] Processing b.jpg ...", "[2/3] PARTIAL: b.jpg (All fields illegible) — $0.0100 (total: $0.03)",
+                  "[3/3] Processing c.jpg ...", "[3/3] FAILED: c.jpg (Model returned no records) — $0.0100 (total: $0.04)")
+        self.feed("warning: skipping 2 .heic/.heif file(s); convert them to JPG first", kind="stderr")
+        for tag, colour in (("ok", "OK"), ("review", "WARN"), ("failed", "ERR"), ("warn", "WARN")):
+            with self.subTest(tag=tag):
+                self.assertTrue(self.app.log.tag_ranges(tag))
+                self.assertEqual(str(self.app.log.tag_cget(tag, "foreground")), grave_ui.THEME[colour])
+
+    def test_the_exit_code_is_for_the_technical_view_only(self):
+        self.app._reset_run_state()
+        self.app._on_proc_exit(1)
+        self.assertNotIn("izlazni kod", self.visible())
+        self.assertIn("Obrada nije uspjela.", self.visible())
+        self.assertIn("[neuspjelo, izlazni kod 1]", self.app.log.get("1.0", "end"))
+
+    def test_the_status_line_is_full_text_colour_and_strong(self):
+        self.assertEqual(str(self.app._status_label.cget("foreground")), grave_ui.THEME["TEXT"])
+        self.assertEqual(self.root.tk.splitlist(str(self.app._status_label.cget("font"))),
+                         tuple(str(part) for part in self.app._fonts["strong"]))
+
 class FontTests(AppCase):
     def test_windows_fonts_are_used_where_installed(self):
         with mock.patch.object(grave_ui.tkfont, "families",

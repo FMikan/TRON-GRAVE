@@ -171,6 +171,93 @@ class ProgressParsingTests(unittest.TestCase):
         self.assertEqual(classify(1, False, False, False), "failed")
 
 
+
+class DescribeLineTests(unittest.TestCase):
+    FILES = {1: "a.jpg", 2: "OK (west).jpg", 3: "c.jpg"}
+
+    def describe(self, line, kind="stdout"):
+        return ui_logic.describe_line(kind, line + "\n", self.FILES)
+
+    def test_results_use_the_csv_vocabulary(self):
+        cases = [
+            ("[1/3] OK: a.jpg (1 record) — $0.0184 (total: $0.02)",
+             ("[1/3] OK         a.jpg · 1 osoba · $0.0184", "ok")),
+            ("[1/3] OK: a.jpg (3 records) — $0.0184 (total: $0.02)",
+             ("[1/3] OK         a.jpg · 3 osobe · $0.0184", "ok")),
+            ("[2/3] PARTIAL: OK (west).jpg (Birth year is after death year) — $0.0100 (total: $0.03)",
+             ("[2/3] ZA PREGLED OK (west).jpg · provjeri godine (rođenje nakon smrti) · $0.0100", "review")),
+            ("[3/3] FAILED: c.jpg (API call failed after retries: timed out)",
+             ("[3/3] NEUSPJELO  c.jpg · greška API-ja (nije naplaćeno)", "failed")),
+            ("[3/3] FAILED: c.jpg (natpis potpuno nečitak) — $0.0100 (total: $0.04)",
+             ("[3/3] NEUSPJELO  c.jpg · natpis potpuno nečitak · $0.0100", "failed")),
+            ("[3/3] FAILED: c.jpg (RuntimeError: boom)",
+             ("[3/3] NEUSPJELO  c.jpg · neočekivana greška (pojedinosti u tehničkom zapisu)", "failed")),
+        ]
+        for line, expected in cases:
+            with self.subTest(line=line):
+                self.assertEqual(self.describe(line), expected)
+
+    def test_every_reason_the_extractor_writes_reads_in_croatian(self):
+        for reason, croatian in (
+                ("Name or surname could not be read", "nečitko ime ili prezime"),
+                ("Model not certain whether a year of birth or death exists", "nesigurna godina rođenja ili smrti"),
+                ("Model reported a problem: natpis oštećen", "model javlja: natpis oštećen"),
+                ("Nearby markers may belong to this grave and were left out", "provjeri: možda više oznaka"),
+                ("Model declined to answer (refusal)", "odbijeno"),
+                ("Response hit the max_tokens ceiling before the answer finished", "odgovor prekinut"),
+                ("Model returned no valid JSON answer (stop_reason: end_turn)", "neispravan odgovor"),
+                ("All fields illegible", "sve nečitko"),
+                ("Model returned no records", "nema podataka"),
+                ("File could not be read or decoded: truncated", "ne mogu otvoriti datoteku"),
+                ("Error code: 529 - overloaded", ui_logic.API_FAILURE_HR),
+                ("output.csv is locked", "output.csv je zaključan")):
+            with self.subTest(reason=reason):
+                self.assertEqual(ui_logic.reason_hr(reason), croatian)
+
+    def test_start_lines_belong_to_the_technical_view_only(self):
+        self.assertEqual(self.describe("[1/3] Processing a.jpg ..."), ("", None))
+
+    def test_the_closing_lines_read_in_croatian(self):
+        self.assertEqual(self.describe("Done. 3 images processed. 1 succeeded, 1 partial, 1 failed."),
+                         ("Gotovo. Obrađeno slika: 3 (OK: 1, za pregled: 1, neuspjelo: 1).", "done"))
+        self.assertEqual(self.describe("Total cost: $0.05"), ("Ukupni trošak: $0.05", "done"))
+        self.assertEqual(self.describe("Output:  /x/out/output.csv"), ("Rezultati: /x/out/output.csv", "info"))
+        self.assertEqual(self.describe("Review:  /x/out/byhand/ (2 images)"),
+                         ("Za pregled: /x/out/byhand/ (slika: 2)", "info"))
+        self.assertEqual(self.describe("Resume: skipping 4 already-processed image(s)."),
+                         ("Nastavak: preskačem već obrađene slike (4).", "info"))
+
+    def test_warnings_and_errors_from_stderr(self):
+        cases = [
+            ("warning: skipping 2 .heic/.heif file(s); convert them to JPG first",
+             ("Upozorenje: preskočeno HEIC/HEIF datoteka: 2 — pretvorite ih u JPG.", "warn")),
+            ("warning: /x/output.csv is locked (open in Excel?) — close it; retrying for 30 s",
+             ("Upozorenje: output.csv je zaključan (otvoren u Excelu?) — zatvorite ga; pokušavam još 30 s.", "warn")),
+            ("warning: could not copy a.jpg to byhand/: disk full",
+             ("Upozorenje: ne mogu kopirati a.jpg u byhand/.", "warn")),
+            ("warning: could not remove a.jpg from byhand/: busy",
+             ("Upozorenje: ne mogu ukloniti a.jpg iz byhand/.", "warn")),
+            ("warning: no price table entry for claude-x; costs shown assume $3/$15 per million tokens",
+             ("Upozorenje: model claude-x nema cijenu u tablici — prikazani trošak je procjena.", "warn")),
+            ("error: [csv-locked] Cannot write", ("Greška: " + ui_logic.FATAL_EXPLANATIONS["csv-locked"], "error")),
+            ("error: Input folder not found: /x", ("Greška: Input folder not found: /x", "error")),
+        ]
+        for line, expected in cases:
+            with self.subTest(line=line):
+                self.assertEqual(self.describe(line, kind="stderr"), expected)
+
+    def test_anything_else_is_shown_as_it_is(self):
+        self.assertIsNone(self.describe("/photos/a.jpg"))                            # a dry-run line
+        self.assertIsNone(self.describe("Traceback (most recent call last):", kind="stderr"))
+        self.assertIsNone(self.describe("[9/9] OK: unknown.jpg (1 record)"))         # no start line for 9
+
+    def test_croatian_plurals(self):
+        for n, word in ((0, "osoba"), (1, "osoba"), (2, "osobe"), (4, "osobe"), (5, "osoba"),
+                        (11, "osoba"), (12, "osoba"), (21, "osoba"), (22, "osobe")):
+            with self.subTest(n=n):
+                self.assertEqual(ui_logic.plural_hr(n, "osoba", "osobe", "osoba"), word)
+        self.assertEqual(ui_logic.plural_hr(1, "sliku", "slike", "slika"), "sliku")
+
 class RunTextTests(unittest.TestCase):
     def test_fatal_tags_are_explained_in_croatian(self):
         self.assertIn("naplat", ui_logic.explain_failure("error: [api-402] API call failed: ..."))

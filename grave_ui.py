@@ -32,8 +32,8 @@ else:
     _EXTRACTOR_CMD = [sys.executable, "-u", str(Path(__file__).resolve().parent / "grave_extractor.py")]
 SETTINGS_PATH = ui_logic.settings_path()
 
-LOG_LINE_CAP = 5000
-LOG_TRIM_BATCH = 500
+LOG_LINE_CAP = 10_000          # both views of the log are kept
+LOG_TRIM_BATCH = 1_000
 DRAIN_CAP_PER_TICK = 200
 MAX_LINE_CHARS = 4096
 BASE_WIDTH, BASE_HEIGHT = 1180, 700
@@ -340,11 +340,16 @@ class App:
         prog.columnconfigure(0, weight=1)
         self.progress = ttk.Progressbar(prog, mode="determinate", maximum=100)
         self.progress.grid(row=0, column=0, columnspan=2, sticky="ew")
-        self._status_label = ttk.Label(prog, textvariable=self.status_var, foreground=THEME["MUTED"])
+        self._status_label = ttk.Label(prog, textvariable=self.status_var, foreground=THEME["TEXT"],
+                                       font=self._fonts["strong"])
         self._status_label.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         self._status_right = ttk.Frame(prog)       # Tehnički zapis, Traži… and the version
         self._status_right.grid(row=1, column=1, sticky="ne", padx=(12, 0), pady=(4, 0))
         ttk.Label(self._status_right, text=f"v{__version__}", foreground=THEME["MUTED"]).pack(side="right")
+        self.raw_log_var = tk.BooleanVar(value=False)
+        self.chk_raw = ttk.Checkbutton(self._status_right, text="Tehnički zapis",
+                                       variable=self.raw_log_var, command=self._toggle_raw_log)
+        self.chk_raw.pack(side="right", padx=(0, 12))
         prog.bind("<Configure>", lambda e: self._status_label.configure(
             wraplength=max(self._px(200), e.width - self._status_right.winfo_reqwidth() - self._px(24))))
 
@@ -363,10 +368,13 @@ class App:
             highlightbackground=t["BORDER"], highlightcolor=t["ACCENT"],
         )
         self.log.grid(row=0, column=0, sticky="nsew")
-        self.log.tag_config("stderr", foreground=t["ERR"])
-        self.log.tag_config("info", foreground=t["INFO"])
-        self.log.tag_config("done", foreground=t["OK"])
+        for tag, colour in (("stderr", t["ERR"]), ("error", t["ERR"]), ("failed", t["ERR"]),
+                            ("info", t["INFO"]), ("done", t["OK"]), ("ok", t["OK"]),
+                            ("review", t["WARN"]), ("warn", t["WARN"])):
+            self.log.tag_config(tag, foreground=colour)
         self.log.tag_config("search", background=t["SEARCH"])
+        self.log.tag_config("raw", elide=True)      # the extractor's own lines: Tehnički zapis
+        self.log.tag_config("nice", elide=False)    # the same lines in Croatian
 
         # ttk scrollbars, so both follow the dark theme (ScrolledText's are classic light ones).
         vbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.log.yview)
@@ -850,7 +858,7 @@ class App:
 
         self.progress.configure(mode="indeterminate", maximum=100)
         self.progress.start(80)
-        self._append_log(f"$ {' '.join(cmd)}\n", "info")
+        self._append_log(f"$ {' '.join(cmd)}\n", "raw", "info")
 
         t_out = threading.Thread(target=self._reader, args=(self.proc.stdout, "stdout"), daemon=True)
         t_err = threading.Thread(target=self._reader, args=(self.proc.stderr, "stderr"), daemon=True)
@@ -946,6 +954,7 @@ class App:
         if len(line) > MAX_LINE_CHARS:
             line = line[:MAX_LINE_CHARS] + "…[truncated]\n"
 
+        raw_tag = "stderr" if kind == "stderr" else None
         if kind == "stdout":
             event = ui_logic.parse_progress(line)
             if event and event[0] == "start":
@@ -966,14 +975,29 @@ class App:
                 self._update_progress(k, total)
             if ui_logic.DONE_RE.match(line):
                 self._saw_done_line = True
-                self._append_log(line, "done")
-                return
-
-        tag = "stderr" if kind == "stderr" else None
-        prefix = "[stderr] " if kind == "stderr" else ""
-        if kind == "stderr" and line.strip():
+                raw_tag = "done"
+        elif line.strip():
             self._last_stderr = line.strip()
-        self._append_log(prefix + line, tag)
+
+        prefix = "[stderr] " if kind == "stderr" else ""
+        self._log_line(prefix + line, raw_tag, ui_logic.describe_line(kind, line, self._run_files))
+
+    def _log_line(self, raw: str, raw_tag: str | None, nice) -> None:
+        """Log one extractor line: raw for the technical view, in Croatian for the default one."""
+        if nice is None:                      # nothing to translate: the same line in both views
+            self._append_log(raw, raw_tag)
+            return
+        text, tag = nice
+        self._append_log(raw, "raw", raw_tag)
+        if text:
+            self._append_log(text + "\n", "nice", tag)
+
+    def _toggle_raw_log(self):
+        """Tehnički zapis: the extractor's own lines instead of the Croatian ones."""
+        raw = self.raw_log_var.get()
+        self.log.tag_config("raw", elide=not raw)
+        self.log.tag_config("nice", elide=raw)
+        self.log.see("end")
 
     def _last_error_line(self) -> str:
         return self._last_stderr or "Pojedinosti su u zapisniku ispod."
@@ -1031,13 +1055,10 @@ class App:
 
     # ----- log widget -------------------------------------------------------
 
-    def _append_log(self, text: str, tag: str | None = None):
+    def _append_log(self, text: str, *tags: str | None):
         at_bottom = self.log.yview()[1] >= 0.999
         self.log.configure(state="normal")
-        if tag:
-            self.log.insert("end", text, tag)
-        else:
-            self.log.insert("end", text)
+        self.log.insert("end", text, tuple(tag for tag in tags if tag))
         self.line_count += text.count("\n")
         if self.line_count > LOG_LINE_CAP + LOG_TRIM_BATCH:
             trim_to = self.line_count - LOG_LINE_CAP
@@ -1053,6 +1074,7 @@ class App:
         self.progress.stop()
         outcome = ui_logic.classify_exit(rc, self._stop_requested, self._saw_done_line,
                                          self._launched_dry_run)
+        self._log_exit(outcome, rc)
         total = self.last_total or 0
         # Real progress: a stopped or failed run must not look finished.
         self.progress.configure(mode="determinate", maximum=max(total, 1),
@@ -1102,7 +1124,6 @@ class App:
             messagebox.showinfo("Zaustavljeno",
                                 f"Zaustavljeno. Obrađeno slika: {saved}; spremljeno u {where}.{resume_hint}")
         elif outcome == "done":
-            self._append_log(f"\n[izlazni kod {rc}]\n", "info")
             if is_dry:
                 self.status_var.set("Probni prolaz završen.")
             else:
@@ -1115,7 +1136,6 @@ class App:
                     title="Sažetak ponovne obrade" if is_retry else "Sažetak obrade",
                 )
         elif outcome == "interrupted":
-            self._append_log(f"\n[prekinuto, izlazni kod {rc}]\n", "stderr")
             self.status_var.set(f"Prekinuto (izlazni kod {rc}).")
             messagebox.showerror(
                 "Obrada prekinuta",
@@ -1123,12 +1143,22 @@ class App:
                 f"{self._last_error_line()}{resume_hint}",
             )
         else:
-            self._append_log(f"\n[neuspjelo, izlazni kod {rc}]\n", "stderr")
             self.status_var.set(f"Neuspjelo (izlazni kod {rc}).")
             lead = (ui_logic.explain_failure(self._last_stderr)
                     or f"Obrada je završila s izlaznim kodom {rc}.")
             messagebox.showerror("Obrada nije uspjela",
                                  f"{lead}\n\n{self._last_error_line()}{resume_hint}")
+
+    def _log_exit(self, outcome: str, rc: int) -> None:
+        """How the run ended: the exit code for the technical view, a sentence for the default one."""
+        if outcome == "done":
+            self._append_log(f"\n[izlazni kod {rc}]\n", "raw", "info")
+        elif outcome == "interrupted":
+            self._append_log(f"\n[prekinuto, izlazni kod {rc}]\n", "raw", "stderr")
+            self._append_log("Obrada je prekinuta.\n", "nice", "error")
+        elif outcome == "failed":
+            self._append_log(f"\n[neuspjelo, izlazni kod {rc}]\n", "raw", "stderr")
+            self._append_log("Obrada nije uspjela.\n", "nice", "error")
 
     def _show_summary_popup(self, csv_path: Path, title: str = "Sažetak obrade"):
         ok = self.counters["ok"]
