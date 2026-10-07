@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 
 from extractor.csv_writer import FILE_INDEX, NOTES_INDEX, read_csv
+from extractor.file_utils import is_supported_image
 from extractor.pricing import DEFAULT_PRICING, MODEL_PRICING
 
 # Weakest to strongest: "Ponovi byhand/" never steps down this list.
@@ -313,6 +314,24 @@ def same_dir(a: Path, b: Path) -> bool:
         return Path(a).resolve() == Path(b).resolve()
     except OSError:
         return False
+
+
+SUBFOLDER_HINT = "Slike su u podmapama (ukupno: {n}) — odaberite podmapu; podmape se ne pretražuju."
+
+
+def images_in_subfolders(folder: Path) -> int:
+    """Supported photos one level down (dot folders skipped); 0 when the folder can't be read."""
+    total = 0
+    try:
+        subfolders = [p for p in Path(folder).iterdir() if not p.name.startswith(".") and p.is_dir()]
+    except OSError:
+        return 0
+    for sub in subfolders:
+        try:
+            total += sum(1 for f in sub.iterdir() if f.is_file() and is_supported_image(f))
+        except OSError:
+            continue
+    return total
 
 
 def csv_data_rows(path: Path) -> int:

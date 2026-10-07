@@ -479,7 +479,9 @@ class App:
         heic = sum(1 for f in files if is_heic(f))
         heic_note = f" Preskočeno HEIC/HEIF datoteka: {heic} (pretvorite ih u JPG)." if heic else ""
         if count == 0:
-            self.preview_var.set("Nema podržanih slika (.jpg/.jpeg/.png/.webp)." + heic_note)
+            sub = ui_logic.images_in_subfolders(p)
+            hint = " " + ui_logic.SUBFOLDER_HINT.format(n=sub) if sub else ""
+            self.preview_var.set("Nema podržanih slika (.jpg/.jpeg/.png/.webp)." + hint + heic_note)
             return
         cost, secs, measured = ui_logic.estimate(self._settings.get("stats"), self._model_id(),
                                                  self._effort_id(), count)
@@ -548,11 +550,11 @@ class App:
             messagebox.showerror("Neispravna ulazna mapa", f"Ne mogu pročitati ulaznu mapu:\n{e}")
             return None
         if image_count == 0:
-            messagebox.showwarning(
-                "Nema slika",
-                f"{in_dir}\n\nnema podržanih slika (.jpg/.jpeg/.png/.webp).\n\n"
-                "Nema se što obraditi — HEIC/HEIF fotografije treba prvo pretvoriti u JPG.",
-            )
+            sub = ui_logic.images_in_subfolders(in_dir)
+            reason = (ui_logic.SUBFOLDER_HINT.format(n=sub) if sub else
+                      "Nema se što obraditi — HEIC/HEIF fotografije treba prvo pretvoriti u JPG.")
+            messagebox.showwarning("Nema slika",
+                                   f"{in_dir}\n\nnema podržanih slika (.jpg/.jpeg/.png/.webp).\n\n{reason}")
             return None
         return in_dir
 

@@ -296,6 +296,19 @@ class RunTextTests(unittest.TestCase):
         self.assertEqual(ui_logic.csv_data_rows(tmp / "missing.csv"), 0)
 
 
+
+class SubfolderTests(unittest.TestCase):
+    def test_photos_one_level_down_are_counted_and_dot_folders_skipped(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        for sub, name in (("parcela_A", "a.jpg"), ("parcela_A", "b.png"), ("parcela_B", "c.HEIC"),
+                          (".thumbnails", "d.jpg")):
+            (tmp / sub).mkdir(exist_ok=True)
+            (tmp / sub / name).write_bytes(b"x")
+        (tmp / "top.jpg").write_bytes(b"x")
+        self.assertEqual(ui_logic.images_in_subfolders(tmp), 2)
+        self.assertEqual(ui_logic.images_in_subfolders(tmp / "missing"), 0)
+
 class SameDirTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())

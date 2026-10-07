@@ -1136,6 +1136,27 @@ class OpenMenuTests(AppCase):
         self.assertEqual(ttk.Style(self.root).lookup("TMenubutton", "focuscolor"), grave_ui.THEME["FOCUS"])
 
 
+
+class SubfolderHintTests(AppCase):
+    def nested(self) -> Path:
+        inp = self.tmp / "groblje"
+        (inp / "parcela_A").mkdir(parents=True)
+        (inp / "parcela_A" / "p_1_x.jpg").write_bytes(jpeg_bytes())
+        self.app.input_var.set(str(inp))
+        return inp
+
+    def test_the_preview_points_to_the_subfolders(self):
+        self.nested()
+        self.app._refresh_preview()
+        self.assertIn(ui_logic.SUBFOLDER_HINT.format(n=1), self.app.preview_var.get())
+
+    def test_the_no_photos_warning_points_to_them_too(self):
+        self.nested()
+        self.app._on_dry_run()
+        title, body = self.dialogs["showwarning"].call_args[0]
+        self.assertEqual(title, "Nema slika")
+        self.assertIn(ui_logic.SUBFOLDER_HINT.format(n=1), body)
+
 class ExcelHintTests(AppCase):
     def test_opening_a_csv_says_how_to_import_it_into_excel(self):
         with mock.patch.object(grave_ui.App, "_open_path", return_value=True):
