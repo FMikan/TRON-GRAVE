@@ -93,6 +93,8 @@ System tags come first and are never shortened; the model's own note comes last,
 **`byhand/`** — copies of images flagged for manual review (PARTIAL or FAILED rows above, except
 photos whose API call failed — resume retries those)
 
+**`logs/`** — the GUI's technical log of every run (`tron-grave-<time>.log`), kept after the window closes
+
 **`.processed`** — bookkeeping for resume: one filename per line for every photo the model
 answered, whatever the verdict, so resume never pays for it twice. Rewritten by every fresh run.
 If it is missing while output.csv has rows, resume refuses to run rather than re-send everything.

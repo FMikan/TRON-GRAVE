@@ -502,6 +502,45 @@ class CostCheckTests(RunCase):
         self.app._on_retry_byhand()
         self.assertEqual([c[0][0] for c in self.choices.call_args_list], ["Ponovna obrada"])
 
+
+class RunLogFileTests(RunCase):
+    def run_two_lines(self):
+        self.app._on_start()
+        self.app._handle_line("stdout", "[1/2] Processing p_1_x.jpg ...\n")
+        self.app._handle_line("stdout", "[1/2] OK: p_1_x.jpg (1 record) — $0.0100 (total: $0.01)\n")
+
+    def test_a_run_keeps_its_raw_log_in_the_output_folder(self):
+        self.run_two_lines()
+        self.app._on_proc_exit(0)
+        logs = list((self.out / "logs").glob("tron-grave-*.log"))
+        self.assertEqual(len(logs), 1)
+        text = logs[0].read_text(encoding="utf-8")
+        self.assertIn("[1/2] Processing p_1_x.jpg ...", text)
+        self.assertIn("[izlazni kod 0]", text)
+        self.assertNotIn("osoba", text)                 # the Croatian view is not duplicated
+        self.assertIsNone(self.app._log_file)           # closed with the run
+
+    def test_a_dry_run_writes_no_log_file(self):
+        self.app._on_dry_run()
+        self.assertFalse((self.inp / "logs").exists())
+        self.assertIsNone(self.app._log_file)
+
+    def test_a_log_folder_that_cannot_be_made_does_not_stop_the_run(self):
+        self.out.mkdir(parents=True)
+        (self.out / "logs").write_text("a file, not a folder", encoding="utf-8")
+        self.app._on_start()
+        self.assertTrue(self.launched)
+        self.assertIn("Zapisnik se ne može spremiti", self.app.log.get("1.0", "end"))
+
+    def test_a_disk_that_fills_up_mid_run_closes_the_log_and_the_run_goes_on(self):
+        self.run_two_lines()
+        broken = mock.Mock()
+        broken.write.side_effect = OSError(28, "No space left on device")
+        self.app._log_file = broken
+        self.app._handle_line("stdout", "[2/2] Processing p_2_x.jpg ...\n")
+        self.assertIsNone(self.app._log_file)
+        self.assertEqual(self.app.log.get("1.0", "end").count("Zapisnik se ne može spremiti"), 1)
+
 class ProgressTests(AppCase):
     def feed(self, *lines):
         for line in lines:

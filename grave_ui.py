@@ -169,6 +169,7 @@ class App:
         self._done_count = 0
         self._api_key: str = ""
         self._settings: dict = {}
+        self._log_file = None
 
         self._load_settings()
         self._fonts = self._pick_fonts()
@@ -925,6 +926,7 @@ class App:
                 resume: bool, retry: bool) -> None:
         self._reset_run_state()
         self._set_running(True)
+        self._open_run_log(out_dir)
         cmd = [
             *_EXTRACTOR_CMD,
             "--input", str(in_dir),
@@ -1039,6 +1041,7 @@ class App:
             self._refresh_output_buttons()      # _set_running(False) leaves Open and Retry off
             self.status_var.set("Pokretanje nije uspjelo.")
             self._release_lock()
+            self._close_run_log()
             return
 
         if sys.platform != "win32":
@@ -1252,6 +1255,8 @@ class App:
         at_bottom = self.log.yview()[1] >= 0.999
         self.log.configure(state="normal")
         self.log.insert("end", text, tuple(tag for tag in tags if tag))
+        if "nice" not in tags:              # the file keeps the raw lines, not their Croatian copies
+            self._write_run_log(text)
         self.line_count += text.count("\n")
         if self.line_count > LOG_LINE_CAP + LOG_TRIM_BATCH:
             trim_to = self.line_count - LOG_LINE_CAP
@@ -1268,6 +1273,7 @@ class App:
         outcome = ui_logic.classify_exit(rc, self._stop_requested, self._saw_done_line,
                                          self._launched_dry_run)
         self._log_exit(outcome, rc)
+        self._close_run_log()
         total = self.last_total or 0
         # Real progress: a stopped or failed run must not look finished.
         self.progress.configure(mode="determinate", maximum=max(total, 1),
@@ -1343,6 +1349,34 @@ class App:
                 body = (f"Obrada je završila s izlaznim kodom {rc}.\n\n"
                         f"{self._last_error_line()}{resume_hint}")
             messagebox.showerror("Obrada nije uspjela", body)
+
+    def _open_run_log(self, out_dir: Path) -> None:
+        """Keep this run's raw log in <izlazna mapa>/logs/, so it outlives the window."""
+        self._log_file = None
+        try:
+            folder = out_dir / "logs"
+            folder.mkdir(parents=True, exist_ok=True)
+            path = folder / f"tron-grave-{time.strftime('%Y%m%d-%H%M%S')}.log"
+            self._log_file = open(path, "a", encoding="utf-8", buffering=1)
+        except OSError as e:
+            self._append_log(f"Zapisnik se ne može spremiti: {e}\n", "warn")
+
+    def _write_run_log(self, text: str) -> None:
+        if self._log_file is None:
+            return
+        try:
+            self._log_file.write(text)
+        except (OSError, ValueError) as e:      # ValueError: the file was closed under us
+            self._close_run_log()
+            self._append_log(f"Zapisnik se ne može spremiti: {e}\n", "warn")
+
+    def _close_run_log(self) -> None:
+        if self._log_file is not None:
+            try:
+                self._log_file.close()
+            except OSError:
+                pass
+            self._log_file = None
 
     def _log_exit(self, outcome: str, rc: int) -> None:
         """How the run ended: the exit code for the technical view, a sentence for the default one."""

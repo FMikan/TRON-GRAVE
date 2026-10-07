@@ -200,6 +200,7 @@ Results are written to the `--output` folder:
 | `byhand/` | Copies of images needing manual review — anything PARTIAL or FAILED, except photos whose API call failed (a resume retries those) |
 | `.processed` | Photos already answered; used by resume |
 | `byhand_retry/` | Results of **Ponovno obradi jačim modelom…** (own `output.csv`, `.processed` and `byhand/`) |
+| `logs/` | The GUI's technical log of every run |
 
 Anything that needs attention is explained in the CSV's `Notes` column; there is no separate
 `errors.txt`.
