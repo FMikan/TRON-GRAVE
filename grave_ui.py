@@ -74,6 +74,48 @@ ONBOARDING = ("Kako započeti:\n"
               "4. Pokreni.\n")
 
 
+class Tooltip:
+    """A small hint that appears after hovering over a widget for a moment."""
+
+    DELAY_MS = 600
+
+    def __init__(self, widget, text_fn, font=None):
+        self.widget, self.text_fn, self.font = widget, text_fn, font
+        self.window = None
+        self._after = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _schedule(self, _event=None):
+        self._cancel()
+        self._after = self.widget.after(self.DELAY_MS, self.show)
+
+    def _cancel(self):
+        if self._after is not None:
+            self.widget.after_cancel(self._after)
+            self._after = None
+
+    def show(self):
+        self._after = None
+        text = self.text_fn()
+        if not text or self.window is not None:
+            return
+        self.window = tk.Toplevel(self.widget)
+        self.window.wm_overrideredirect(True)
+        self.window.wm_geometry(f"+{self.widget.winfo_rootx() + 8}"
+                                f"+{self.widget.winfo_rooty() + self.widget.winfo_height() + 4}")
+        tk.Label(self.window, text=text, background=THEME["SURFACE"], foreground=THEME["TEXT"],
+                 borderwidth=1, relief="solid", padx=6, pady=3, justify="left",
+                 font=self.font).pack()
+
+    def _hide(self, _event=None):
+        self._cancel()
+        if self.window is not None:
+            self.window.destroy()
+            self.window = None
+
+
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -128,6 +170,8 @@ class App:
         self._fonts = self._pick_fonts()
         self._apply_theme()
         self._build_ui()
+        self._show_path_end(self.ent_in)
+        self._show_path_end(self.ent_out)
         self.root.report_callback_exception = self._report_callback_exception
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         if sys.platform == "darwin":
@@ -278,18 +322,20 @@ class App:
         top.columnconfigure(1, weight=1)
 
         ttk.Label(top, text="Ulazna mapa").grid(row=0, column=0, sticky="w", padx=6, pady=6)
-        ttk.Entry(top, textvariable=self.input_var, state="readonly").grid(
-            row=0, column=1, sticky="ew", padx=6, pady=6
-        )
+        self.ent_in = ttk.Entry(top, textvariable=self.input_var, state="readonly")
+        self.ent_in.grid(row=0, column=1, sticky="ew", padx=6, pady=6)
         self.btn_in = ttk.Button(top, text="Odaberi…", command=self._pick_input)
         self.btn_in.grid(row=0, column=2, padx=6, pady=6)
 
         ttk.Label(top, text="Izlazna mapa").grid(row=1, column=0, sticky="w", padx=6, pady=6)
-        ttk.Entry(top, textvariable=self.output_var, state="readonly").grid(
-            row=1, column=1, sticky="ew", padx=6, pady=6
-        )
+        self.ent_out = ttk.Entry(top, textvariable=self.output_var, state="readonly")
+        self.ent_out.grid(row=1, column=1, sticky="ew", padx=6, pady=6)
         self.btn_out = ttk.Button(top, text="Odaberi…", command=self._pick_output)
         self.btn_out.grid(row=1, column=2, padx=6, pady=6)
+        self._path_tips = []
+        for entry, var in ((self.ent_in, self.input_var), (self.ent_out, self.output_var)):
+            entry.bind("<Configure>", lambda _e, en=entry: self._show_path_end(en), add="+")
+            self._path_tips.append(Tooltip(entry, var.get, font=self._fonts["small"]))
 
         ttk.Label(top, text="API ključ").grid(row=2, column=0, sticky="w", padx=6, pady=6)
         ttk.Entry(top, textvariable=self.api_key_var, show="•").grid(
@@ -451,6 +497,11 @@ class App:
 
     # ----- folder picking + preview -----------------------------------------
 
+    @staticmethod
+    def _show_path_end(entry) -> None:
+        """Scroll a path field to its end: the folder name matters more than the drive."""
+        entry.xview_moveto(1.0)
+
     def _pick_input(self):
         d = filedialog.askdirectory(
             title="Odaberite ulaznu mapu",
@@ -458,6 +509,7 @@ class App:
         )
         if d:
             self.input_var.set(d)
+            self._show_path_end(self.ent_in)
             self._save_settings()
             self._refresh_preview()
             self._refresh_readiness()
@@ -469,6 +521,7 @@ class App:
         )
         if d:
             self.output_var.set(d)
+            self._show_path_end(self.ent_out)
             self._save_settings()
             self._refresh_preview()
             self._refresh_output_buttons()

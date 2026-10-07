@@ -1175,6 +1175,27 @@ class ReadinessTests(AppCase):
             self.addCleanup(root.destroy)
             grave_ui.App(root)                       # the window still opens
 
+
+class PathFieldTests(AppCase):
+    def test_a_long_path_scrolls_to_its_folder_name(self):
+        self.app.input_var.set(str(self.tmp / ("dugi_naziv_" * 20) / "Groblje Sv. Marka"))
+        self.app._show_path_end(self.app.ent_in)
+        self.assertGreater(self.app.ent_in.xview()[0], 0.5)
+
+    def test_hovering_shows_the_full_path(self):
+        self.app.input_var.set("/x/y/Groblje")
+        tip = self.app._path_tips[0]
+        tip.show()
+        self.addCleanup(tip._hide)
+        self.assertEqual(tip.window.winfo_children()[0].cget("text"), "/x/y/Groblje")
+        tip._hide()
+        self.assertIsNone(tip.window)
+
+    def test_an_empty_field_shows_no_tooltip(self):
+        tip = self.app._path_tips[1]
+        tip.show()
+        self.assertIsNone(tip.window)
+
 class SearchTests(AppCase):
     def fill(self):
         self.app._append_log("Ivan Horvat\nMarija Horvat\nPetar Kovač\n")
