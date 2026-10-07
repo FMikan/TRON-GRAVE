@@ -1159,8 +1159,8 @@ class App:
         where = "byhand_retry/output.csv" if is_retry else "output.csv"
         fatal = ui_logic.FATAL_TAG_RE.match(self._last_stderr)
         tag = fatal.group(1) if fatal else None
-        # A dry run saved nothing to resume, and Nastavi cannot cure these two errors.
-        resumable = not is_dry and tag not in ("resume-refused", "input-is-byhand")
+        # A dry run saved nothing to resume, and Nastavi cannot cure these errors.
+        resumable = not is_dry and tag not in ("resume-refused", "input-is-byhand", "no-images", "output-exists")
         # Carries its own blank line, so a dialog without it does not end on one.
         resume_hint = (f"\n\nZa nastavak kliknite {again} i odaberite Nastavi — već obrađene slike "
                        "neće se ponovno slati (ni plaćati).") if resumable else ""
@@ -1192,10 +1192,11 @@ class App:
             )
         else:
             self.status_var.set(f"Neuspjelo (izlazni kod {rc}).")
-            lead = (ui_logic.explain_failure(self._last_stderr)
-                    or f"Obrada je završila s izlaznim kodom {rc}.")
-            messagebox.showerror("Obrada nije uspjela",
-                                 f"{lead}\n\n{self._last_error_line()}{resume_hint}")
+            body = ui_logic.failure_text(self._last_stderr, again, resumable)
+            if body is None:
+                body = (f"Obrada je završila s izlaznim kodom {rc}.\n\n"
+                        f"{self._last_error_line()}{resume_hint}")
+            messagebox.showerror("Obrada nije uspjela", body)
 
     def _log_exit(self, outcome: str, rc: int) -> None:
         """How the run ended: the exit code for the technical view, a sentence for the default one."""

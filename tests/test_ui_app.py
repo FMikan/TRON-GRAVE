@@ -832,6 +832,23 @@ class CallbackErrorTests(AppCase):
         self.assertIn("Nastavi", body)
 
 
+    def test_a_rejected_key_names_the_fix_and_hides_the_raw_reply(self):
+        self.app._reset_run_state()
+        self.app._handle_line("stderr", "error: [api-401] API call failed: Error code: 401 - "
+                                        "{'type': 'error', 'error': {'type': 'authentication_error'}}\n")
+        self.app._on_proc_exit(1)
+        body = self.dialogs["showerror"].call_args[0][1]
+        self.assertIn("Upišite ispravan ključ", body)
+        self.assertIn(ui_logic.RESUMED_FREE, body)
+        self.assertNotIn("{'type'", body)
+
+    def test_a_retry_points_back_to_its_own_button(self):
+        self.app._reset_run_state()
+        self.app._is_retry_run = True
+        self.app._handle_line("stderr", "error: [api-down] 3 API calls in a row failed\n")
+        self.app._on_proc_exit(1)
+        self.assertIn(f"{grave_ui.RETRY_LABEL} → Nastavi", self.dialogs["showerror"].call_args[0][1])
+
 class EstimateAppTests(AppCase):
     def saved(self) -> dict:
         return json.loads(self.settings_path.read_text(encoding="utf-8")) if self.settings_path.exists() else {}

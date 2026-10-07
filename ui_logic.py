@@ -360,6 +360,36 @@ def explain_failure(stderr_line: str) -> str | None:
     return FATAL_EXPLANATIONS.get(m.group(1)) if m else None
 
 
+# What to do about each fatal error; {again} is the button that resumes the run.
+FATAL_ACTIONS = {
+    "api-401": "Upišite ispravan ključ u polje API ključ i kliknite Spremi ključ, zatim {again} → Nastavi.",
+    "api-402": "Provjerite plaćanje i stanje računa na console.anthropic.com, zatim {again} → Nastavi.",
+    "api-403": "Odaberite drugi model ili na console.anthropic.com provjerite dozvole ključa, "
+               "zatim {again} → Nastavi.",
+    "api-404": "Odaberite drugi model, zatim {again} → Nastavi.",
+    "spend-cap": "Povećajte limit na console.anthropic.com ili pričekajte minutu, zatim {again} → Nastavi.",
+    "api-down": "Provjerite internetsku vezu, zatim {again} → Nastavi.",
+    "csv-locked": "Zatvorite output.csv (npr. u Excelu), zatim {again} → Nastavi.",
+    "resume-refused": "Kliknite {again} i odaberite Prepiši; stare datoteke spremaju se kao kopija.",
+    "input-is-byhand": "Odaberite drugu izlaznu mapu.",
+    "no-images": "Odaberite mapu sa slikama .jpg, .jpeg, .png ili .webp.",
+    "output-exists": "Kliknite {again} i odaberite Nastavi ili Prepiši.",
+}
+RESUMED_FREE = "Već obrađene slike neće se ponovno slati ni plaćati."
+
+
+def failure_text(stderr_line: str, again: str, resumable: bool) -> str | None:
+    """Explanation and next step for a tagged fatal error, without the raw API reply."""
+    explanation = explain_failure(stderr_line)
+    if explanation is None:
+        return None
+    tag = FATAL_TAG_RE.match(stderr_line).group(1)
+    parts = [explanation, FATAL_ACTIONS[tag].format(again=again)]
+    if resumable:
+        parts.append(RESUMED_FREE)
+    return "\n\n".join(parts)
+
+
 # ---- estimates -----------------------------------------------------------------------
 
 IMAGE_TOKENS_GUESS = 4_700      # a phone photo after the API's own downscale (<=4,784 tokens)

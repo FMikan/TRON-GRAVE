@@ -274,6 +274,19 @@ class RunTextTests(unittest.TestCase):
         for code in ("old-format", "no-processed", "missing-csv", "unreadable", "not-utf8"):
             self.assertIn(code, ui_logic.RESUME_BLOCKERS)
 
+    def test_every_fatal_tag_names_its_next_step(self):
+        self.assertEqual(set(ui_logic.FATAL_ACTIONS), set(ui_logic.FATAL_EXPLANATIONS))
+        text = ui_logic.failure_text("error: [api-401] API call failed: Error code: 401 - {'type': 'error'}",
+                                     "Pokreni", resumable=True)
+        self.assertEqual(text, "\n\n".join([ui_logic.FATAL_EXPLANATIONS["api-401"],
+                                            "Upišite ispravan ključ u polje API ključ i kliknite Spremi ključ, "
+                                            "zatim Pokreni → Nastavi.",
+                                            ui_logic.RESUMED_FREE]))
+        self.assertNotIn("{'type'", text)
+
+    def test_untagged_failures_have_no_prepared_text(self):
+        self.assertIsNone(ui_logic.failure_text("Traceback (most recent call last):", "Pokreni", True))
+
     def test_the_row_count_survives_an_excel_saved_file(self):
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp, True)
