@@ -1,6 +1,7 @@
 import ctypes
 import json
 import os
+import re
 import time
 import tkinter as tk
 import unittest
@@ -23,6 +24,16 @@ def contrast(fg: str, bg: str) -> float:
         return 0.2126 * r + 0.7152 * g + 0.0722 * b
     high, low = sorted((luminance(fg), luminance(bg)), reverse=True)
     return (high + 0.05) / (low + 0.05)
+
+
+def all_widgets(root):
+    """Every widget under root, root included."""
+    found, stack = [], [root]
+    while stack:
+        widget = stack.pop()
+        found.append(widget)
+        stack.extend(widget.winfo_children())
+    return found
 
 
 class LabelTests(AppCase):
@@ -132,6 +143,25 @@ class ThemeTests(AppCase):
         self.assertGreaterEqual(contrast(t["FOCUS"], t["INPUT"]), 3.0)
         self.assertGreaterEqual(contrast(t["FOCUS"], t["BG"]), 3.0)
         self.assertGreaterEqual(contrast(t["ON_ACCENT"], t["ACCENT"]), 3.0)
+
+    def test_the_checkbox_box_and_the_log_border_follow_the_dark_theme(self):
+        style = ttk.Style(self.root)
+        t = grave_ui.THEME
+        self.assertEqual(style.lookup("TCheckbutton", "indicatorbackground"), t["INPUT"])
+        self.assertEqual(style.lookup("TCheckbutton", "indicatorbackground", ["selected"]), t["ACCENT"])
+        self.assertEqual(str(self.app.log.cget("highlightbackground")), t["BORDER"])
+        self.assertEqual(str(self.app.log.cget("highlightcolor")), t["ACCENT"])
+
+    def test_the_version_label_is_readable(self):
+        label = next(w for w in all_widgets(self.root)
+                     if isinstance(w, ttk.Label) and str(w.cget("text")) == f"v{grave_ui.__version__}")
+        self.assertEqual(str(label.cget("foreground")), grave_ui.THEME["MUTED"])
+        self.assertGreaterEqual(contrast(grave_ui.THEME["MUTED"], grave_ui.THEME["BG"]), 4.5)
+
+    def test_every_colour_comes_from_the_palette(self):
+        source = Path(grave_ui.__file__).read_text(encoding="utf-8")
+        after_palette = source.split("THEME = {", 1)[1].split("\n}\n", 1)[1]
+        self.assertEqual(re.findall(r"""["']#[0-9a-fA-F]{6}["']""", after_palette), [])
 
 
 class LockAndDryRunTests(RunCase):

@@ -197,8 +197,11 @@ class App:
         self.root.option_add("*TCombobox*Listbox.selectBackground", t["ACCENT"])
         self.root.option_add("*TCombobox*Listbox.selectForeground", t["ON_ACCENT"])
 
-        style.configure("TCheckbutton", background=t["BG"], foreground=t["TEXT"], focuscolor=t["FOCUS"])
-        style.map("TCheckbutton", background=[("active", t["BG"])], foreground=[("disabled", t["DISABLED_FG"])])
+        style.configure("TCheckbutton", background=t["BG"], foreground=t["TEXT"], focuscolor=t["FOCUS"],
+                        indicatorbackground=t["INPUT"], indicatorforeground=t["TEXT"])
+        style.map("TCheckbutton", background=[("active", t["BG"])],
+                  foreground=[("disabled", t["DISABLED_FG"])],
+                  indicatorbackground=[("disabled", t["DISABLED_BG"]), ("selected", t["ACCENT"])])
 
         style.configure("TProgressbar", troughcolor=t["INPUT"], background=t["ACCENT"],
                         bordercolor=t["BG"], lightcolor=t["ACCENT"], darkcolor=t["ACCENT"], thickness=8)
@@ -218,7 +221,7 @@ class App:
         )
         ttk.Label(
             header, text="Izdvajanje podataka s nadgrobnih spomenika",
-            font=("Segoe UI", 9), foreground="#9aa0a6",
+            font=("Segoe UI", 9), foreground=THEME["MUTED"],
         ).grid(row=1, column=0, sticky="w")
 
         top = ttk.Frame(self.root)
@@ -261,7 +264,7 @@ class App:
         self.effort_combo.bind("<<ComboboxSelected>>", self._on_effort_change)
         self._refresh_effort_options()
 
-        ttk.Label(top, textvariable=self.preview_var, foreground="#9aa0a6").grid(
+        ttk.Label(top, textvariable=self.preview_var, foreground=THEME["MUTED"]).grid(
             row=5, column=0, columnspan=3, sticky="w", padx=6, pady=(2, 0)
         )
 
@@ -303,10 +306,10 @@ class App:
         prog.columnconfigure(0, weight=1)
         self.progress = ttk.Progressbar(prog, mode="determinate", maximum=100)
         self.progress.grid(row=0, column=0, columnspan=2, sticky="ew")
-        ttk.Label(prog, textvariable=self.status_var, foreground="#9aa0a6").grid(
+        ttk.Label(prog, textvariable=self.status_var, foreground=THEME["MUTED"]).grid(
             row=1, column=0, sticky="w", pady=(4, 0)
         )
-        ttk.Label(prog, text=f"v{__version__}", foreground="#5b606b").grid(
+        ttk.Label(prog, text=f"v{__version__}", foreground=THEME["MUTED"]).grid(
             row=1, column=1, sticky="e", padx=(12, 0), pady=(4, 0)
         )
 
@@ -315,17 +318,19 @@ class App:
         log_frame.rowconfigure(0, weight=1)
         log_frame.columnconfigure(0, weight=1)
 
+        t = THEME
         self.log = tk.Text(
             log_frame, wrap="none", height=15, borderwidth=0, relief="flat",
             font=("Consolas", 10), state="disabled",
-            background="#15171c", foreground="#e6e6e6", insertbackground="#e6e6e6",
-            selectbackground="#3a4a6b",
+            background=t["LOG_BG"], foreground=t["TEXT"], insertbackground=t["TEXT"],
+            selectbackground=t["SELECT"], highlightthickness=1,
+            highlightbackground=t["BORDER"], highlightcolor=t["ACCENT"],
         )
         self.log.grid(row=0, column=0, sticky="nsew")
-        self.log.tag_config("stderr", foreground="#ff7b72")
-        self.log.tag_config("info", foreground="#79b8ff")
-        self.log.tag_config("done", foreground="#7ee787")
-        self.log.tag_config("search", background="#4a3a00")
+        self.log.tag_config("stderr", foreground=t["ERR"])
+        self.log.tag_config("info", foreground=t["INFO"])
+        self.log.tag_config("done", foreground=t["OK"])
+        self.log.tag_config("search", background=t["SEARCH"])
 
         # ttk scrollbars, so both follow the dark theme (ScrolledText's are classic light ones).
         vbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.log.yview)
@@ -586,13 +591,13 @@ class App:
                  f"Već obrađeno: {done}/{total} slika iz ulazne mape.",
         ).grid(row=0, column=0, columnspan=3, sticky="w")
         ttk.Label(
-            frm, justify="left", foreground="#9aa0a6", wraplength=520,
+            frm, justify="left", foreground=THEME["MUTED"], wraplength=520,
             text="Nastavi — obradi samo preostale slike i dopiši ih.\n"
                  "Prepiši — spremi kopiju (output.<vrijeme>.bak.csv i byhand.<vrijeme>.bak) "
                  "i kreni ispočetka.",
         ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
         if blocker:
-            ttk.Label(frm, text=f"Nastavak nije moguć: {blocker}.", foreground="#ff7b72",
+            ttk.Label(frm, text=f"Nastavak nije moguć: {blocker}.", foreground=THEME["ERR"],
                       wraplength=520, justify="left").grid(row=2, column=0, columnspan=3,
                                                            sticky="w", pady=(8, 0))
         win.btn_resume = ttk.Button(frm, text="Nastavi", style="Accent.TButton",
@@ -1053,7 +1058,7 @@ class App:
                 row=row, column=0, columnspan=2, sticky="w")
             row += 1
             for reason, count in reasons:
-                ttk.Label(frm, text=f"  {count}×  {reason}", foreground="#9aa0a6").grid(
+                ttk.Label(frm, text=f"  {count}×  {reason}", foreground=THEME["MUTED"]).grid(
                     row=row, column=0, columnspan=2, sticky="w")
                 row += 1
 
