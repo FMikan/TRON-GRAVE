@@ -1046,6 +1046,36 @@ class OpenMenuTests(AppCase):
     def test_the_menu_button_shows_keyboard_focus(self):
         self.assertEqual(ttk.Style(self.root).lookup("TMenubutton", "focuscolor"), grave_ui.THEME["FOCUS"])
 
+
+class ExcelHintTests(AppCase):
+    def test_opening_a_csv_says_how_to_import_it_into_excel(self):
+        with mock.patch.object(grave_ui.App, "_open_path", return_value=True):
+            self.app._open_csv(self.tmp / "output.csv")
+        self.assertEqual(self.app.status_var.get(), grave_ui.EXCEL_HINT)
+        self.assertIn("Iz teksta/CSV-a", grave_ui.EXCEL_HINT)
+
+    def test_a_csv_that_did_not_open_gets_no_hint(self):
+        self.app.status_var.set("prije")
+        with mock.patch.object(grave_ui.App, "_open_path", return_value=False):
+            self.app._open_csv(self.tmp / "output.csv")
+        self.assertEqual(self.app.status_var.get(), "prije")
+
+    def test_the_menu_and_the_summary_open_csvs_with_the_hint(self):
+        out = self.tmp / "out"
+        out.mkdir()
+        init_csv(out / "output.csv")
+        self.app.output_var.set(str(out))
+        self.app._refresh_open_menu()
+        with mock.patch.object(grave_ui.App, "_open_csv") as open_csv:
+            self.app.open_menu.invoke(0)
+            win = REAL_SHOW_SUMMARY(self.app, out / "output.csv", "Sažetak obrade")
+            self.addCleanup(win.destroy)
+            next(w for w in all_widgets(win)
+                 if isinstance(w, ttk.Button) and w.cget("text") == "Otvori CSV").invoke()
+        self.assertEqual([c[0][0] for c in open_csv.call_args_list], [out / "output.csv"] * 2)
+        texts = [str(w.cget("text")) for w in all_widgets(win) if isinstance(w, ttk.Label)]
+        self.assertIn(grave_ui.EXCEL_HINT, texts)
+
 class SummaryTests(AppCase):
     def pending_timers(self) -> set[str]:
         return set(self.root.tk.splitlist(self.root.tk.call("after", "info")))

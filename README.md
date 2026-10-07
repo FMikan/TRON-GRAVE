@@ -61,6 +61,7 @@ matched against the retry CSV.
 
 Opening in Excel: the file is comma-separated UTF-8. If Excel puts everything into column A
 (Croatian regional settings expect `;`), open it with **Data → From Text/CSV** and choose *Comma*.
+The GUI repeats this tip in its status line whenever it opens a CSV, and in the end-of-run summary.
 
 The **`Notes`** column (Croatian) is filled only for edge cases and is the single place
 to look when reviewing results. Typical notes:

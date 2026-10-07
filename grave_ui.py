@@ -65,6 +65,8 @@ THEME = {
 }
 
 RETRY_LABEL = "Ponovno obradi jačim modelom…"
+# Excel opens a double-clicked .csv with the system list separator, ";" under Croatian settings.
+EXCEL_HINT = "U Excelu: Podaci → Iz teksta/CSV-a (Data → From Text/CSV), razdjelnik: zarez."
 
 
 class App:
@@ -329,11 +331,11 @@ class App:
                                  activebackground=THEME["ACCENT"], activeforeground=THEME["ON_ACCENT"],
                                  disabledforeground=THEME["DISABLED_FG"], borderwidth=0)
         self.open_menu.add_command(label="output.csv",
-                                   command=lambda: self._open_path(self._out_path() / "output.csv"))
+                                   command=lambda: self._open_csv(self._out_path() / "output.csv"))
         self.open_menu.add_command(label="Slike za pregled (byhand/)",
                                    command=lambda: self._open_path(self._out_path() / "byhand"))
         self.open_menu.add_command(label="Rezultati ponovne obrade (byhand_retry/output.csv)",
-                                   command=lambda: self._open_path(self._out_path() / "byhand_retry" / "output.csv"))
+                                   command=lambda: self._open_csv(self._out_path() / "byhand_retry" / "output.csv"))
         self.open_menu.add_separator()
         self.open_menu.add_command(label="Izlazna mapa", command=lambda: self._open_path(self._out_path()))
         self.btn_open.configure(menu=self.open_menu)
@@ -1203,10 +1205,13 @@ class App:
                     row=row, column=0, columnspan=2, sticky="w")
                 row += 1
 
-        ttk.Button(frm, text="Otvori CSV", command=lambda: self._open_path(csv_path)).grid(
+        ttk.Button(frm, text="Otvori CSV", command=lambda: self._open_csv(csv_path)).grid(
             row=row, column=0, sticky="w", pady=(14, 0))
         close_btn = ttk.Button(frm, text="Zatvori", command=win.destroy)
         close_btn.grid(row=row, column=1, sticky="e", pady=(14, 0))
+        ttk.Label(frm, text=EXCEL_HINT, foreground=THEME["MUTED"], font=self._fonts["small"],
+                  wraplength=self._px(460), justify="left").grid(
+            row=row + 1, column=0, columnspan=2, sticky="w", pady=(12, 0))
         win.bind("<Escape>", lambda _e: win.destroy())
         win.bind("<Return>", lambda _e: win.destroy())
         close_btn.focus_set()
@@ -1355,10 +1360,11 @@ class App:
 
     # ----- helpers ----------------------------------------------------------
 
-    def _open_path(self, p: Path):
+    def _open_path(self, p: Path) -> bool:
+        """Open a file or folder with the system's own app; False when it could not be opened."""
         if not p.exists():
             messagebox.showinfo("Nije pronađeno", f"{p} ne postoji.")
-            return
+            return False
         try:
             if sys.platform.startswith("linux"):
                 subprocess.Popen(
@@ -1371,6 +1377,13 @@ class App:
                 os.startfile(str(p))  # type: ignore[attr-defined]
         except OSError as e:
             messagebox.showerror("Ne mogu otvoriti", str(e))
+            return False
+        return True
+
+    def _open_csv(self, path: Path) -> None:
+        """Open a CSV, and say how to import it into Excel set to Croatian (it expects ;)."""
+        if self._open_path(path):
+            self.status_var.set(EXCEL_HINT)
 
     def _notify_done(self):
         if not sys.platform.startswith("linux"):
