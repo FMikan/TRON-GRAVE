@@ -97,7 +97,7 @@ If it is missing while output.csv has rows, resume refuses to run rather than re
 
 **`byhand_retry/`** — results of **Ponovi byhand/**, with its own `output.csv`, `.processed` and `byhand/`
 
-**`output.<time>.bak.csv`**, **`byhand.<time>.bak/`** — what **Prepiši** set aside (`<time>` is `YYYYMMDD-HHMMSS`)
+**`output.<time>.bak.csv`**, **`byhand.<time>.bak/`**, **`byhand_retry.<time>.bak/`** — what **Prepiši** (or `--overwrite` on the CLI) set aside (`<time>` is `YYYYMMDD-HHMMSS`)
 
 > There is no longer a separate `errors.txt`; all review information now lives in the `Notes` column.
 
@@ -280,6 +280,10 @@ Options:
                      header); an unreadable output.csv, or one that is no longer UTF-8
                      (re-saved as ANSI by Excel or an editor), is refused too.
                      With --dry-run, lists only the photos that would run.
+  --overwrite        Start fresh even though output.csv has rows: output.csv, byhand/ and
+                     byhand_retry/ are first moved aside as output.<time>.bak.csv,
+                     byhand.<time>.bak and byhand_retry.<time>.bak. Without it (or --resume) a
+                     run refuses an output folder whose output.csv has rows.
   --verbose          Show detailed per-image progress
   --dry-run          List discovered images without making any API calls
 ```
@@ -307,10 +311,12 @@ and the closing lines report the run's total: `Total cost: $2.35`.
   "run completed, check the Notes column" — not that the run broke.
 - `1` — Fatal error: the run stopped early (missing/invalid API key, billing error, monthly spend
   cap, no access to the model or no such model, three API failures in a row, output.csv locked
-  (e.g. open in Excel), resume refused, input folder is the output's `byhand/`, unwritable output
-  folder); stderr then reads `error: [tag] …`, where the tag is `api-401`, `api-402`, `api-403`,
-  `api-404`, `spend-cap`, `api-down`, `csv-locked`, `resume-refused` or `input-is-byhand` (a
-  missing key or input folder, or an unwritable output folder, prints a plain `error: …`)
+  (e.g. open in Excel), resume refused, input folder is the output's `byhand/`, no supported
+  images in the input folder, an output.csv with rows and neither `--resume` nor `--overwrite`,
+  unwritable output folder); stderr then reads `error: [tag] …`, where the tag is `api-401`,
+  `api-402`, `api-403`, `api-404`, `spend-cap`, `api-down`, `csv-locked`, `resume-refused`,
+  `input-is-byhand`, `no-images` or `output-exists` (a missing key or input folder, or an
+  unwritable output folder, prints a plain `error: …`)
 - `130` — Interrupted by user (Ctrl+C)
 
 ---

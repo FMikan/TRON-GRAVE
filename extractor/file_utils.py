@@ -2,6 +2,7 @@ import os
 import re
 import shutil
 import stat
+import time
 from pathlib import Path
 
 FILENAME_PATTERN = re.compile(r'^[^_]+_([^_]+)_.+')
@@ -76,3 +77,45 @@ def _force_unlink(path: Path) -> None:
     except PermissionError:
         os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
         path.unlink()
+
+
+# What a fresh start moves aside, and the backup name of each: (name, pattern, is a folder).
+_BACKUPS = (("output.csv", "output.{}.bak.csv", False),
+            ("byhand", "byhand.{}.bak", True),
+            ("byhand_retry", "byhand_retry.{}.bak", True))
+
+
+def back_up_outputs(out_dir: Path, stamp: str | None = None) -> list[Path]:
+    """Move output.csv, byhand/ and byhand_retry/ aside under one timestamp: all of them or none.
+
+    Raises OSError after putting back whatever had already moved (on Windows a photo open in a
+    viewer keeps its folder from moving). A second backup within the same second gets "-2", "-3"...
+    so it never lands on the first one.
+    """
+    stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
+    targets = [(out_dir / name, pattern, folder) for name, pattern, folder in _BACKUPS
+               if ((out_dir / name).is_dir() if folder else (out_dir / name).is_file())]
+    suffix, n = stamp, 1
+    while any((out_dir / pattern.format(suffix)).exists() for _src, pattern, _folder in targets):
+        n += 1
+        suffix = f"{stamp}-{n}"
+    moved = []
+    try:
+        for src, pattern, folder in targets:
+            dst = out_dir / pattern.format(suffix)
+            if folder:
+                src.rename(dst)
+            else:
+                src.replace(dst)
+            moved.append((src, dst, folder))
+    except OSError:
+        for src, dst, folder in reversed(moved):
+            try:
+                if folder:
+                    dst.rename(src)
+                else:
+                    dst.replace(src)
+            except OSError:
+                pass
+        raise
+    return [dst for _src, dst, _folder in moved]

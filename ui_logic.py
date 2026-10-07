@@ -347,6 +347,8 @@ FATAL_EXPLANATIONS = {
     "csv-locked": "output.csv je zaključan — zatvorite ga (npr. u Excelu).",
     "resume-refused": "Nastavak nije moguć za ovu izlaznu mapu.",
     "input-is-byhand": "Ulazna mapa ne smije biti byhand/ mapa izlazne mape.",
+    "no-images": "Ulazna mapa nema podržanih slika.",
+    "output-exists": "U izlaznoj mapi već postoji output.csv s rezultatima.",
 }
 
 

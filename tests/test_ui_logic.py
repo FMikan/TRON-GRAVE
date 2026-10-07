@@ -269,7 +269,7 @@ class RunTextTests(unittest.TestCase):
 
     def test_every_fatal_tag_and_resume_problem_has_a_text(self):
         for tag in ("api-401", "api-402", "api-403", "api-404", "spend-cap", "api-down",
-                    "csv-locked", "resume-refused", "input-is-byhand"):
+                    "csv-locked", "resume-refused", "input-is-byhand", "no-images", "output-exists"):
             self.assertIn(tag, ui_logic.FATAL_EXPLANATIONS)
         for code in ("old-format", "no-processed", "missing-csv", "unreadable", "not-utf8"):
             self.assertIn(code, ui_logic.RESUME_BLOCKERS)

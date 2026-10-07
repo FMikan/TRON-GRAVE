@@ -9,8 +9,8 @@ from pathlib import Path
 from unittest import mock
 
 import grave_extractor
-from extractor import image_processor
-from extractor.csv_writer import CSV_COLUMNS, append_rows, read_csv, read_processed
+from extractor import file_utils, image_processor
+from extractor.csv_writer import CSV_COLUMNS, append_rows, init_csv, read_csv, read_processed
 from tests.helpers import FakeClient, answer, api_error, jpeg_bytes, message, record
 
 
@@ -246,6 +246,7 @@ class ResumeTests(CliCase):
         self.add_image("p_1_x.jpg")
         self.run_cli(message(answer(record(name=None))))
         self.assertTrue((self.out / "byhand" / "p_1_x.jpg").exists())
+        (self.out / "output.csv").unlink()           # no rows left to protect: a fresh run may start
         # An API failure neither copies nor removes, so only the fresh-run clear can delete the copy.
         self.run_cli(api_error(400))
         self.assertFalse((self.out / "byhand" / "p_1_x.jpg").exists())
@@ -290,6 +291,59 @@ class ResumeTests(CliCase):
         self.assertIn("Review:", out)
         self.assertIn("(1 images)", out)
 
+
+
+class FreshRunGuardTests(CliCase):
+    def test_a_folder_without_photos_stops_before_anything_is_created(self):
+        (self.inp / "parcela_A").mkdir()
+        (self.inp / "parcela_A" / "p_1_x.jpg").write_bytes(jpeg_bytes())
+        self.add_image("IMG_1.HEIC", b"heic")
+        code, _, err, client = self.run_cli()
+        self.assertEqual((code, client.calls), (1, []))
+        self.assertIn("error: [no-images]", err)
+        self.assertIn("subfolders are not searched", err)
+        self.assertIn("skipped 1 HEIC/HEIF", err)
+        self.assertFalse(self.out.exists())
+
+    def test_a_dry_run_on_an_empty_folder_says_so_too(self):
+        code, _, err, _ = self.run_cli(args=("--dry-run",))
+        self.assertEqual(code, 1)
+        self.assertIn("[no-images]", err)
+
+    def test_a_fresh_run_refuses_an_output_csv_with_rows(self):
+        self.add_image("p_1_x.jpg")
+        self.run_cli(message(answer(record(name=None))))           # one row, one photo in byhand/
+        before = (self.out / "output.csv").read_bytes()
+        code, _, err, client = self.run_cli(message(answer(record())))
+        self.assertEqual((code, client.calls), (1, []))
+        self.assertIn("error: [output-exists]", err)
+        self.assertEqual((self.out / "output.csv").read_bytes(), before)
+        self.assertTrue((self.out / "byhand" / "p_1_x.jpg").exists())
+
+    def test_a_header_only_output_csv_is_not_refused(self):
+        self.add_image("p_1_x.jpg")
+        self.out.mkdir()
+        init_csv(self.out / "output.csv")
+        code, *_ = self.run_cli(message(answer(record())))
+        self.assertEqual(code, 0)
+
+    def test_overwrite_sets_the_old_results_aside_under_one_stamp(self):
+        self.add_image("p_1_x.jpg")
+        self.run_cli(message(answer(record(name=None))))
+        (self.out / "byhand_retry").mkdir()
+        with mock.patch.object(file_utils.time, "strftime", return_value="20260101-000001"):
+            code, *_ = self.run_cli(message(answer(record())), args=("--overwrite",))
+        self.assertEqual(code, 0)
+        self.assertEqual(sorted(p.name for p in self.out.iterdir() if ".bak" in p.name),
+                         ["byhand.20260101-000001.bak", "byhand_retry.20260101-000001.bak",
+                          "output.20260101-000001.bak.csv"])
+        self.assertEqual(len(self.rows()), 1)
+
+    def test_overwrite_and_resume_cannot_be_combined(self):
+        self.add_image("p_1_x.jpg")
+        code, _, err, _ = self.run_cli(args=("--overwrite", "--resume"))
+        self.assertEqual(code, 2)
+        self.assertIn("not allowed with argument", err)
 
 class InputTests(CliCase):
     def test_skipped_heic_photos_are_reported_and_dotfiles_ignored(self):

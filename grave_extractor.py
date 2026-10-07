@@ -2,6 +2,7 @@
 """TRON-GRAVE: extract burial records from tombstone photographs."""
 
 import argparse
+import csv
 import os
 import signal
 import sys
@@ -16,7 +17,8 @@ from extractor.csv_writer import (
     mark_processed, read_csv, read_processed, resume_problem, rewrite_rows,
 )
 from extractor.file_utils import (
-    clear_byhand, copy_to_byhand, extract_id, is_heic, is_supported_image, remove_from_byhand,
+    back_up_outputs, clear_byhand, copy_to_byhand, extract_id, is_heic, is_supported_image,
+    remove_from_byhand,
 )
 from extractor.image_processor import ImageResult, failure_row, process_image
 from extractor.pricing import MODEL_PRICING
@@ -44,8 +46,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--effort", default=None,
                         choices=["low", "medium", "high", "xhigh", "max"],
                         help="Reasoning/effort level (output_config.effort). Omit for the model's own default.")
-    parser.add_argument("--resume", action="store_true",
-                        help="Skip images listed in the output folder's .processed file and append instead of overwriting")
+    fresh_or_resume = parser.add_mutually_exclusive_group()
+    fresh_or_resume.add_argument("--resume", action="store_true",
+                                 help="Skip images listed in the output folder's .processed file and append instead of overwriting")
+    fresh_or_resume.add_argument("--overwrite", action="store_true",
+                                 help="Start fresh even if output.csv has rows: move output.csv, byhand/ and "
+                                      "byhand_retry/ aside as *.<time>.bak first")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print images that would be processed and exit")
     parser.add_argument("--verbose", action="store_true",
@@ -64,6 +70,14 @@ def fatal(msg: str, tag: str | None = None) -> None:
     msg = " ".join(msg.split())
     print(f"error: [{tag}] {msg}" if tag else f"error: {msg}", file=sys.stderr)
     sys.exit(1)
+
+
+def has_rows(output_csv: Path) -> bool:
+    """Whether output.csv holds results a fresh run would throw away (unreadable counts as yes)."""
+    try:
+        return bool(read_csv(output_csv)[1])
+    except (OSError, ValueError, csv.Error):
+        return output_csv.exists()
 
 
 def write_rows(output_csv: Path, rows: list[list]) -> None:
@@ -143,6 +157,10 @@ def main() -> int:
     if heic_count:
         print(f"warning: skipping {heic_count} .heic/.heif file(s); convert them to JPG first",
               file=sys.stderr)
+    if not images:
+        skipped = f"; skipped {heic_count} HEIC/HEIF file(s)" if heic_count else ""
+        fatal(f"No supported images in {input_dir} (.jpg/.jpeg/.png/.webp; subfolders are not "
+              f"searched){skipped}.", "no-images")
 
     if args.resume:
         processed = resume_filter(output_dir)
@@ -175,6 +193,15 @@ def main() -> int:
         if args.resume and output_csv.exists():
             drop_rows_being_rerun(output_csv, images)
         else:
+            if args.overwrite:
+                try:
+                    back_up_outputs(output_dir)
+                except OSError as e:
+                    fatal(f"Cannot move the old results aside ({e}). Close output.csv and the photos "
+                          "in byhand/, then try again.")
+            elif has_rows(output_csv):
+                fatal(f"{output_csv} already has rows. Use --resume to continue, or --overwrite to "
+                      "move it aside and start over.", "output-exists")
             init_csv(output_csv)
             init_processed(output_dir)
             clear_byhand(byhand_dir)

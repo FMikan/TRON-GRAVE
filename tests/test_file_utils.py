@@ -4,9 +4,10 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from extractor.file_utils import (
-    clear_byhand, copy_to_byhand, extract_id, is_heic, is_supported_image,
+    back_up_outputs, clear_byhand, copy_to_byhand, extract_id, is_heic, is_supported_image,
     remove_from_byhand,
 )
 
@@ -82,3 +83,40 @@ class ByhandTests(unittest.TestCase):
         clear_byhand(self.byhand)
         self.assertEqual([p.name for p in self.byhand.iterdir()], ["notes.txt"])
         clear_byhand(self.tmp / "missing")          # no folder: no error
+
+
+class BackupTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.out = self.tmp / "out"
+        (self.out / "byhand").mkdir(parents=True)
+        (self.out / "byhand" / "a.jpg").write_bytes(b"x")
+        (self.out / "byhand_retry").mkdir()
+        (self.out / "output.csv").write_text("ID\n1\n", encoding="utf-8")
+
+    def test_everything_moves_aside_under_one_stamp(self):
+        moved = back_up_outputs(self.out, "20260101-000001")
+        self.assertEqual(sorted(p.name for p in moved),
+                         ["byhand.20260101-000001.bak", "byhand_retry.20260101-000001.bak",
+                          "output.20260101-000001.bak.csv"])
+        self.assertEqual(sorted(p.name for p in self.out.iterdir()), sorted(p.name for p in moved))
+
+    def test_what_is_missing_is_skipped(self):
+        shutil.rmtree(self.out / "byhand")
+        shutil.rmtree(self.out / "byhand_retry")
+        self.assertEqual([p.name for p in back_up_outputs(self.out, "s")], ["output.s.bak.csv"])
+
+    def test_a_second_backup_in_the_same_second_gets_its_own_name(self):
+        back_up_outputs(self.out, "20260101-000001")
+        (self.out / "output.csv").write_text("ID\n2\n", encoding="utf-8")
+        moved = back_up_outputs(self.out, "20260101-000001")
+        self.assertEqual([p.name for p in moved], ["output.20260101-000001-2.bak.csv"])
+        self.assertEqual((self.out / "output.20260101-000001.bak.csv").read_text(encoding="utf-8"), "ID\n1\n")
+
+    def test_a_folder_that_will_not_move_puts_everything_back(self):
+        with mock.patch.object(Path, "rename", side_effect=PermissionError("in use")):
+            with self.assertRaises(PermissionError):
+                back_up_outputs(self.out, "s")
+        self.assertTrue((self.out / "output.csv").exists())
+        self.assertEqual(list(self.out.glob("*.bak*")), [])
