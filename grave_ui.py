@@ -171,6 +171,9 @@ class App:
         self._settings: dict = {}
         self._log_file = None
         self._lock_note: str | None = None
+        self._billed_n = 0
+        self._billed_secs = 0.0
+        self._photo_started: float | None = None
 
         self._load_settings()
         self._fonts = self._pick_fonts()
@@ -1169,12 +1172,18 @@ class App:
                 self._run_files[k] = name
                 if self.run_start_time is None:
                     self.run_start_time = time.monotonic()
+                self._photo_started = time.monotonic()
                 self._update_progress(k - 1, total, current=name)
             elif event:
                 _, k, total, verdict, total_cost = event
-                self._last_result_time = time.monotonic()
-                if total_cost is not None:
+                now = time.monotonic()
+                self._last_result_time = now
+                if total_cost is not None:          # billed: only these teach the estimate
                     self.total_cost = total_cost
+                    if self._photo_started is not None:
+                        self._billed_secs += now - self._photo_started
+                    self._billed_n += 1
+                self._photo_started = None
                 self.counters[{"OK": "ok", "PARTIAL": "partial"}.get(verdict, "failed")] += 1
                 if verdict != "OK":
                     self._flagged.add(self._run_files.get(k, ""))
@@ -1210,15 +1219,16 @@ class App:
         return self._last_stderr or "Pojedinosti su u zapisniku ispod."
 
     def _record_stats(self):
-        """Teach the estimate: add this run's cost and time to its model/effort sums."""
-        n = sum(self.counters.values())
-        if n <= 0 or self.run_start_time is None or self._last_result_time is None:
+        """Teach the estimate from this run's billed photos: their cost and their own processing time.
+
+        Unbilled results (API failures, unreadable files) cost nothing and took no model time, and
+        a Stop in the middle of a photo is not photo time either.
+        """
+        if self._billed_n <= 0:
             return
-        # Timed to the last result line, not to the process exit: a Stop in the middle of a
-        # photo, or the wait for the process to end, is not photo time.
         self._settings["stats"] = ui_logic.record_run(
             self._settings.get("stats"), self._run_model, self._run_effort,
-            self.total_cost, self._last_result_time - self.run_start_time, n,
+            self.total_cost, self._billed_secs, self._billed_n,
         )
         self._save_settings()
         self._refresh_preview()
@@ -1596,6 +1606,9 @@ class App:
         self._run_files = {}
         self._flagged = set()
         self._done_count = 0
+        self._billed_n = 0
+        self._billed_secs = 0.0
+        self._photo_started = None
         self.progress.configure(mode="determinate", value=0, maximum=100)
         self.log.configure(state="normal")
         self.log.delete("1.0", "end")

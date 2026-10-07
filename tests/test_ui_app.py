@@ -1041,6 +1041,24 @@ class EstimateAppTests(AppCase):
         entry = self.saved()["stats"]["claude-opus-5-5|max"]
         self.assertEqual((entry["n"], entry["secs"]), (1, 10.0))
 
+    def test_unbilled_photos_teach_nothing(self):
+        clock = [100.0]
+        self.app._reset_run_state()
+        self.app._run_model, self.app._run_effort = "claude-sonnet-5", "high"
+        with mock.patch.object(grave_ui.time, "monotonic", lambda: clock[0]):
+            for t, line in ((100.0, "[1/3] Processing a.jpg ..."),
+                            (110.0, "[1/3] OK: a.jpg (1 record) — $0.2500 (total: $0.25)"),
+                            (110.0, "[2/3] Processing b.jpg ..."),
+                            (140.0, "[2/3] FAILED: b.jpg (API call failed after retries: timeout)"),
+                            (140.0, "[3/3] Processing c.jpg ..."),
+                            (150.0, "[3/3] OK: c.jpg (1 record) — $0.2500 (total: $0.50)"),
+                            (150.0, "Done. 3 images processed. 2 succeeded, 0 partial, 1 failed.")):
+                clock[0] = t
+                self.feed(line)
+            self.app._on_proc_exit(2)
+        entry = self.saved()["stats"]["claude-sonnet-5|high"]
+        self.assertEqual((entry["n"], entry["secs"], entry["cost"]), (2, 20.0, 0.5))
+
     def test_saved_stats_that_are_not_finite_leave_the_preview_working(self):
         # json reads a hand-edited NaN back, and the preview refreshes from __init__
         inp = self.tmp / "in"
