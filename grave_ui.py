@@ -1151,6 +1151,7 @@ class App:
                 self._show_summary_popup(
                     out_dir / "output.csv",
                     title="Sažetak ponovne obrade" if is_retry else "Sažetak obrade",
+                    retry=is_retry,
                 )
         elif outcome == "interrupted":
             self.status_var.set(f"Prekinuto (izlazni kod {rc}).")
@@ -1177,41 +1178,63 @@ class App:
             self._append_log(f"\n[neuspjelo, izlazni kod {rc}]\n", "raw", "stderr")
             self._append_log("Obrada nije uspjela.\n", "nice", "error")
 
-    def _show_summary_popup(self, csv_path: Path, title: str = "Sažetak obrade"):
+    def _show_summary_popup(self, csv_path: Path, title: str = "Sažetak obrade", retry: bool = False):
         ok = self.counters["ok"]
         partial = self.counters["partial"]
         failed = self.counters["failed"]
         total = ok + partial + failed
         reasons = ui_logic.tally_review_notes(csv_path, self._flagged)
+        to_review = self._byhand_images(csv_path.parent) if partial + failed else 0
 
         win = self._dialog(title)
-
         frm = ttk.Frame(win, padding=16)
         frm.grid(row=0, column=0, sticky="nsew")
-        ttk.Label(frm, text=title, font=self._fonts["title"]).grid(
-            row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        ttk.Label(frm, text=title, font=self._fonts["title"]).grid(row=0, column=0, sticky="w", pady=(0, 10))
         ttk.Label(frm, text=f"Ukupno: {total}   ·   OK: {ok}   ·   Za pregled: {partial}   ·   "
-                            f"Neuspjelo: {failed}").grid(row=1, column=0, columnspan=2, sticky="w")
-        ttk.Label(frm, text=f"Ukupni trošak: ${self.total_cost:.2f}").grid(
-            row=2, column=0, columnspan=2, sticky="w", pady=(2, 10))
+                            f"Neuspjelo: {failed}").grid(row=1, column=0, sticky="w")
+        cost_line = f"Ukupni trošak: ${self.total_cost:.2f}"
+        if self.run_start_time is not None and self._last_result_time is not None:
+            cost_line += f"   ·   Trajanje: {self._fmt_duration(self._last_result_time - self.run_start_time)}"
+        ttk.Label(frm, text=cost_line).grid(row=2, column=0, sticky="w", pady=(2, 10))
 
         row = 3
         if reasons:
             ttk.Label(frm, text="Najčešći razlozi za pregled:", font=self._fonts["strong"]).grid(
-                row=row, column=0, columnspan=2, sticky="w")
+                row=row, column=0, sticky="w")
             row += 1
             for reason, count in reasons:
                 ttk.Label(frm, text=f"  {count}×  {reason}", foreground=THEME["MUTED"]).grid(
-                    row=row, column=0, columnspan=2, sticky="w")
+                    row=row, column=0, sticky="w")
                 row += 1
 
-        ttk.Button(frm, text="Otvori CSV", command=lambda: self._open_csv(csv_path)).grid(
-            row=row, column=0, sticky="w", pady=(14, 0))
-        close_btn = ttk.Button(frm, text="Zatvori", command=win.destroy)
-        close_btn.grid(row=row, column=1, sticky="e", pady=(14, 0))
+        offer_retry = to_review > 0 and not retry
+        if offer_retry:
+            model, effort = ui_logic.retry_settings(self._model_id(), self._effort_id())
+            cost, _secs, _measured = ui_logic.estimate(self._settings.get("stats"), model, effort, to_review)
+            ttk.Label(frm, foreground=THEME["MUTED"], wraplength=self._px(460), justify="left",
+                      text=f"Ponovna obrada jačim modelom ({ui_logic.MODEL_LABELS.get(model, model)}, "
+                           f"{ui_logic.EFFORT_LABELS.get(effort, effort)}): ~${cost:.2f} za {to_review} "
+                           f"{ui_logic.plural_hr(to_review, 'sliku', 'slike', 'slika')}.").grid(
+                row=row, column=0, sticky="w", pady=(10, 0))
+            row += 1
+
+        def retry_now():
+            win.destroy()
+            self._on_retry_byhand()
+
+        buttons = ttk.Frame(frm)
+        buttons.grid(row=row, column=0, sticky="ew", pady=(14, 0))
+        ttk.Button(buttons, text="Otvori CSV", command=lambda: self._open_csv(csv_path)).pack(side="left")
+        if to_review:
+            ttk.Button(buttons, text="Otvori slike za pregled",
+                       command=lambda: self._open_path(csv_path.parent / "byhand")).pack(side="left", padx=(6, 0))
+        if offer_retry:
+            ttk.Button(buttons, text=RETRY_LABEL, command=retry_now).pack(side="left", padx=(6, 0))
+        close_btn = ttk.Button(buttons, text="Zatvori", command=win.destroy)
+        close_btn.pack(side="right", padx=(12, 0))
         ttk.Label(frm, text=EXCEL_HINT, foreground=THEME["MUTED"], font=self._fonts["small"],
-                  wraplength=self._px(460), justify="left").grid(
-            row=row + 1, column=0, columnspan=2, sticky="w", pady=(12, 0))
+                  wraplength=self._px(460), justify="left").grid(row=row + 1, column=0, sticky="w", pady=(12, 0))
+
         win.bind("<Escape>", lambda _e: win.destroy())
         win.bind("<Return>", lambda _e: win.destroy())
         close_btn.focus_set()

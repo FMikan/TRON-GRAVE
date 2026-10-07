@@ -1107,6 +1107,46 @@ class SummaryTests(AppCase):
         self.assertTrue(win.bind("<Escape>"))
         self.assertTrue(win.bind("<Return>"))
 
+    def summary(self, flagged=2, byhand_photos=2, retry=False):
+        out = self.tmp / "out"
+        (out / "byhand").mkdir(parents=True, exist_ok=True)
+        for i in range(byhand_photos):
+            (out / "byhand" / f"p_{i}.jpg").write_bytes(jpeg_bytes())
+        init_csv(out / "output.csv")
+        self.app.counters = {"ok": 1, "partial": flagged, "failed": 0}
+        win = REAL_SHOW_SUMMARY(self.app, out / "output.csv", "Sažetak obrade", retry)
+        self.addCleanup(win.destroy)
+        widgets = all_widgets(win)
+        texts = [str(w.cget("text")) for w in widgets if isinstance(w, (ttk.Label, ttk.Button))]
+        buttons = {str(w.cget("text")): w for w in widgets if isinstance(w, ttk.Button)}
+        return win, texts, buttons
+
+    def test_photos_to_review_are_offered_with_a_priced_retry(self):
+        _win, texts, buttons = self.summary()
+        self.assertIn("Otvori slike za pregled", buttons)
+        self.assertIn(grave_ui.RETRY_LABEL, buttons)
+        self.assertTrue(any(t.startswith("Ponovna obrada jačim modelom (Claude Opus 5.5, visok): ~$")
+                            and t.endswith(" za 2 slike.") for t in texts), texts)
+
+    def test_the_retry_button_closes_the_summary_and_starts_the_retry(self):
+        win, _texts, buttons = self.summary()
+        with mock.patch.object(grave_ui.App, "_on_retry_byhand") as retry:
+            buttons[grave_ui.RETRY_LABEL].invoke()
+        retry.assert_called_once_with()
+        self.assertFalse(win.winfo_exists())
+
+    def test_a_clean_run_or_a_retry_run_offers_no_retry(self):
+        for flagged, retry in ((0, False), (2, True)):
+            with self.subTest(flagged=flagged, retry=retry):
+                _win, texts, buttons = self.summary(flagged=flagged, retry=retry)
+                self.assertNotIn(grave_ui.RETRY_LABEL, buttons)
+                self.assertFalse(any(t.startswith("Ponovna obrada") for t in texts))
+
+    def test_the_summary_says_how_long_the_run_took(self):
+        self.app.run_start_time, self.app._last_result_time = 100.0, 600.0
+        _win, texts, _buttons = self.summary(flagged=0)
+        self.assertIn("Ukupni trošak: $0.00   ·   Trajanje: 8m20s", texts)
+
     def test_a_summary_closed_at_once_leaves_no_timer_on_a_deleted_command(self):
         # The grab timer waits 100 ms. A timer the popup owns is deleted with it, and when it then
         # fires Tk opens its own "Application Error" window. So close the popup and fire its timers
@@ -1118,7 +1158,7 @@ class SummaryTests(AppCase):
         win = REAL_SHOW_SUMMARY(self.app, csv_path, "Sažetak obrade")
         win.withdraw()
         timers = self.pending_timers() - before
-        next(w for w in win.winfo_children()[0].winfo_children()
+        next(w for w in all_widgets(win)
              if isinstance(w, ttk.Button) and w.cget("text") == "Zatvori").invoke()
         for timer in timers:
             script, kind = self.root.tk.splitlist(self.root.tk.call("after", "info", timer))
