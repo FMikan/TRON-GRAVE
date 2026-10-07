@@ -25,6 +25,7 @@ Designed for digitizing Croatian cemetery records, with full support for Croatia
 - **Real-time progress & live cost counter** — GUI shows progress bar, the photo being processed, ETA, and the *real* running API cost (computed from each response's actual token usage, not an estimate). The log reads in Croatian, coloured by verdict (OK / za pregled / neuspjelo); **Tehnički zapis** switches it to the extractor's own lines
 - **End-of-run summary** — a popup with OK / for-review / failed counts, the most common review reasons among this run's flagged photos, the total cost and how long the run took, buttons to open the CSV and the photos to review, and — when photos need review — what a retry with a stronger model would cost, one click away; the window comes back to the front (taskbar flash on Windows)
 - **Resume interrupted runs** — when the output folder already has an output.csv, **Pokreni** asks **Nastavi** (resume) / **Prepiši** (move output.csv, byhand/ and byhand_retry/ aside and start over) / **Odustani**; a resume never re-sends a photo the model already answered
+- **Cost check** — when the estimate for the photos still to process is $2 or more, **Pokreni** shows the model, effort and estimate and asks before spending
 - **Ponovno obradi jačim modelom…** — re-runs just the `byhand/` photos with Claude Opus 5.5 at high effort, or your selected model/effort if stronger, into `byhand_retry/`; it asks before touching earlier retry results and can be resumed
 - **Automatic retries** — retries failed API calls with exponential backoff; the run stops (and can be resumed later) on a billing error, the monthly spend cap, or three API failures in a row
 - **Settings persistence** — remembers folders, model and effort; the API key is stored only when you click **Spremi**, in an owner-only file (`%APPDATA%\tron-grave` on Windows, `~/Library/Application Support/tron-grave` on macOS, `~/.config/tron-grave` on Linux — or `$XDG_CONFIG_HOME/tron-grave` when that is set)
@@ -144,7 +145,8 @@ output tokens; after a run the GUI estimates from your real cost and time per ph
 and effort. The GUI's preview line labels the first-run guess *gruba procjena* (rough estimate)
 and counts 20 s per photo; once a finished or stopped run with that model and effort has taught
 it, it uses those averages instead and reads *prema prošlim obradama* (from past runs). It also
-says how many HEIC/HEIF files it will skip.
+says how many HEIC/HEIF files it will skip. When a run's estimate reaches $2, **Pokreni** asks
+before starting.
 
 These are only for the *before-you-start* estimate. Once a run is going, the status bar and the
 end-of-run summary show the **real** cost, computed from each API response's actual token usage

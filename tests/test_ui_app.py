@@ -408,6 +408,60 @@ class LaunchFailureTests(RunCase):
             self.app.btn_open, self.app.btn_retry_byhand)], ["normal"] * 2)
 
 
+
+class CostCheckTests(RunCase):
+    def priced_at(self, per_photo):
+        self.app._settings["stats"] = {"claude-sonnet-5|high": {"cost": per_photo, "secs": 10.0, "n": 1}}
+
+    def test_an_expensive_run_asks_first_with_count_model_and_estimate(self):
+        self.priced_at(2.5)
+        self.app._on_start()
+        (title, body, choices), kwargs = self.choices.call_args
+        self.assertEqual(title, "Potvrda troška")
+        self.assertIn("Obraditi 2 slike?", body)
+        self.assertIn("Model: Claude Sonnet 5 (zadani), napor: visok", body)
+        self.assertIn("~$5.00", body)
+        self.assertIn("prema prošlim obradama", body)
+        self.assertEqual((choices, kwargs), ([("run", "Pokreni obradu"), ("cancel", "Odustani")], {"default": "run"}))
+        self.assertTrue(self.launched)
+
+    def test_declining_launches_nothing_moves_nothing_and_frees_the_lock(self):
+        self.priced_at(2.5)
+        self.out.mkdir(parents=True)
+        init_csv(self.out / "output.csv")
+        append_rows(self.out / "output.csv", [["1", "Ivan", "Horvat", 1920, 1999, "", "p_1_x.jpg"]])
+        self.answer("cancel")
+        with mock.patch.object(grave_ui.App, "_ask_existing_output", return_value="fresh"):
+            self.app._on_start()
+        self.assertEqual(self.launched, [])
+        self.assertTrue((self.out / "output.csv").exists())          # Prepiši had not run yet
+        self.assertEqual(list(self.out.glob("*.bak*")), [])
+        self.assertFalse(self.lock().exists())
+
+    def test_a_cheap_run_starts_without_asking(self):
+        self.app._on_start()
+        self.choices.assert_not_called()
+        self.assertTrue(self.launched)
+
+    def test_nastavi_counts_only_the_photos_still_to_process(self):
+        self.priced_at(2.0)
+        self.out.mkdir(parents=True)
+        init_csv(self.out / "output.csv")
+        append_rows(self.out / "output.csv", [["1", "Ivan", "Horvat", 1920, 1999, "", "p_1_x.jpg"]])
+        init_processed(self.out)
+        mark_processed(self.out, Path("p_1_x.jpg"))
+        with mock.patch.object(grave_ui.App, "_ask_existing_output", return_value="resume"):
+            self.app._on_start()
+        self.assertIn("Obraditi 1 sliku?", self.choices.call_args[0][1])
+
+    def test_a_retry_is_asked_once(self):
+        self.app._settings["stats"] = {"claude-opus-5-5|high": {"cost": 9.0, "secs": 1.0, "n": 1}}
+        (self.out / "byhand").mkdir(parents=True)
+        for name in ("p_1_x.jpg", "p_2_x.jpg"):
+            (self.out / "byhand" / name).write_bytes(jpeg_bytes())
+        self.app._on_retry_byhand()
+        self.assertEqual([c[0][0] for c in self.choices.call_args_list], ["Ponovna obrada"])
+
 class ProgressTests(AppCase):
     def feed(self, *lines):
         for line in lines:

@@ -606,6 +606,7 @@ class App:
         try:
             mode = self._choose_output_mode(in_dir, out_dir)
             if (mode is None
+                    or (not retry and not self._cost_confirmed(in_dir, out_dir, model, effort, mode))
                     or (mode == "fresh" and not self._backup_outputs(out_dir))
                     or not self._csv_writable(out_dir)):
                 self._release_lock()
@@ -614,6 +615,28 @@ class App:
         except BaseException:
             self._release_lock()
             raise
+
+    def _cost_confirmed(self, in_dir: Path, out_dir: Path, model: str, effort: str, mode: str) -> bool:
+        """Ask before a run whose estimate reaches COST_CONFIRM_USD; True to go ahead."""
+        try:
+            names = {f.name for f in in_dir.iterdir() if f.is_file() and is_supported_image(f)}
+        except OSError:
+            return True                 # the extractor reports an unreadable folder itself
+        if mode == "resume":
+            names -= read_processed(out_dir)
+        count = len(names)
+        cost, secs, measured = ui_logic.estimate(self._settings.get("stats"), model, effort, count)
+        if count == 0 or cost < ui_logic.COST_CONFIRM_USD:
+            return True
+        basis = "prema prošlim obradama" if measured else "gruba procjena"
+        return self._ask_choice(
+            "Potvrda troška",
+            f"Obraditi {count} {ui_logic.plural_hr(count, 'sliku', 'slike', 'slika')}?\n\n"
+            f"Model: {ui_logic.MODEL_LABELS.get(model, model)}, "
+            f"napor: {ui_logic.EFFORT_LABELS.get(effort, effort)}\n"
+            f"Procjena: ~${cost:.2f}, ~{self._fmt_duration(secs)} ({basis}).",
+            [("run", "Pokreni obradu"), ("cancel", "Odustani")], default="run",
+        ) == "run"
 
     def _choose_output_mode(self, in_dir: Path, out_dir: Path) -> str | None:
         """'fresh', 'resume', or None when the user cancels, for a run into out_dir."""

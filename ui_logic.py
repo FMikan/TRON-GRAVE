@@ -365,6 +365,7 @@ TEXT_TOKENS_GUESS = 400
 PROMPT_TOKENS_GUESS = 4_500     # the cached system prompt, read at the cache-read rate
 OUTPUT_TOKENS_GUESS = 1_500
 SECS_PER_IMAGE_GUESS = 20
+COST_CONFIRM_USD = 2.0          # Pokreni asks first from this estimate up
 
 
 def fallback_cost_per_image(model: str) -> float:
