@@ -383,6 +383,8 @@ TRON-GRAVE/
 ├── requirements.txt        # Python dependencies
 ├── build.bat               # One-click Windows build script
 ├── TRON-GRAVE.spec         # PyInstaller build config
+├── CHANGELOG.md            # Release notes
+├── .github/workflows/      # CI: tests on Ubuntu, Windows and macOS; the Windows exe
 └── .env.example            # API key template
 ```
 
@@ -409,7 +411,8 @@ Run the test suite from the repo root, inside the virtual environment:
 python -m unittest discover -s tests -t . -v
 ```
 
-GUI tests need a display and are skipped without one; no test calls the real API.
+GUI tests need a display and are skipped without one; no test calls the real API. CI runs the suite
+on Ubuntu (under Xvfb), Windows and macOS on every push, and builds the Windows exe.
 
 ---
 
