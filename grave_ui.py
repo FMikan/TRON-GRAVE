@@ -103,7 +103,7 @@ class App:
         self.total_cost = 0.0
         self.lock_path: Path | None = None
         self.lock_token: str | None = None
-        self._search_index = "1.0"
+        self._search_index = None
         self._is_retry_run = False
         self._run_out_dir: Path | None = None
         self._run_model = ui_logic.DEFAULT_MODEL
@@ -359,6 +359,8 @@ class App:
         self.chk_raw = ttk.Checkbutton(self._status_right, text="Tehnički zapis",
                                        variable=self.raw_log_var, command=self._toggle_raw_log)
         self.chk_raw.pack(side="right", padx=(0, 12))
+        self.btn_search = ttk.Button(self._status_right, text="Traži… (Ctrl+F)", command=self._show_search)
+        self.btn_search.pack(side="right", padx=(0, 12), before=self.chk_raw)
         prog.bind("<Configure>", lambda e: self._status_label.configure(
             wraplength=max(self._px(200), e.width - self._status_right.winfo_reqwidth() - self._px(24))))
 
@@ -397,9 +399,13 @@ class App:
         ttk.Label(self.search_frame, text="Traži:").pack(side="left", padx=(8, 4))
         self._search_entry = ttk.Entry(self.search_frame, textvariable=self.search_var)
         self._search_entry.pack(side="left", fill="x", expand=True, padx=4)
+        self.search_info_var = tk.StringVar()
+        ttk.Label(self.search_frame, textvariable=self.search_info_var, foreground=THEME["MUTED"]).pack(
+            side="left", padx=4)
         ttk.Button(self.search_frame, text="Sljedeće", command=self._search_next).pack(side="left", padx=4)
         ttk.Button(self.search_frame, text="Zatvori", command=self._hide_search).pack(side="left", padx=(4, 8))
         self._search_entry.bind("<Return>", lambda _e: self._search_next())
+        self._search_entry.bind("<Shift-Return>", lambda _e: self._search_prev())
 
         # Caps Lock turns Ctrl+F into keysym F; macOS users press Cmd+F. Cmd is bound on Aqua only:
         # elsewhere Tk reads it as Mod1, which Windows sets while Num Lock is on, and every "f"
@@ -1412,7 +1418,7 @@ class App:
         self.log.delete("1.0", "end")
         self.log.configure(state="disabled")
         self.line_count = 0
-        self._search_index = "1.0"
+        self._search_index = None
 
     # ----- helpers ----------------------------------------------------------
 
@@ -1477,22 +1483,43 @@ class App:
     def _hide_search(self):
         self.search_frame.grid_forget()
         self.log.tag_remove("search", "1.0", "end")
-        self._search_index = "1.0"
+        self._search_index = None
+        self.search_info_var.set("")
+
+    def _search_matches(self, q: str) -> list[str]:
+        """Where q starts in the visible log, top to bottom (Tk skips the hidden view's lines)."""
+        found, start = [], "1.0"
+        while True:
+            idx = self.log.search(q, start, nocase=True, stopindex="end")
+            if not idx:
+                return found
+            found.append(idx)
+            start = f"{idx}+{len(q)}c"
+
+    def _search_step(self, backwards: bool) -> None:
+        q = self.search_var.get()
+        self.log.tag_remove("search", "1.0", "end")
+        matches = self._search_matches(q) if q else []
+        if not matches:
+            self.search_info_var.set("Nema rezultata" if q else "")
+            return
+        cur = self._search_index
+        if backwards:
+            earlier = [i for i in matches if cur is None or self.log.compare(i, "<", cur)]
+            idx = earlier[-1] if earlier else matches[-1]
+        else:
+            later = [i for i in matches if cur is None or self.log.compare(i, ">", cur)]
+            idx = later[0] if later else matches[0]
+        self.log.tag_add("search", idx, f"{idx}+{len(q)}c")
+        self.log.see(idx)
+        self._search_index = idx
+        self.search_info_var.set(f"{matches.index(idx) + 1}/{len(matches)}")
 
     def _search_next(self):
-        q = self.search_var.get()
-        if not q:
-            return
-        self.log.tag_remove("search", "1.0", "end")
-        idx = self.log.search(q, self._search_index, nocase=True, stopindex="end")
-        if not idx:
-            idx = self.log.search(q, "1.0", nocase=True, stopindex="end")
-            if not idx:
-                return
-        end_idx = f"{idx}+{len(q)}c"
-        self.log.tag_add("search", idx, end_idx)
-        self.log.see(idx)
-        self._search_index = end_idx
+        self._search_step(backwards=False)
+
+    def _search_prev(self):
+        self._search_step(backwards=True)
 
     # ----- settings ---------------------------------------------------------
 

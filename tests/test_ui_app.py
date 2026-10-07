@@ -1137,6 +1137,39 @@ class OpenMenuTests(AppCase):
 
 
 
+
+class SearchTests(AppCase):
+    def fill(self):
+        self.app._append_log("Ivan Horvat\nMarija Horvat\nPetar Kovač\n")
+
+    def test_the_bar_counts_matches_wraps_and_says_when_there_are_none(self):
+        self.fill()
+        self.app.search_var.set("horvat")
+        for expected in ("1/2", "2/2", "1/2"):
+            self.app._search_next()
+            self.assertEqual(self.app.search_info_var.get(), expected)
+        self.app.search_var.set("Babić")
+        self.app._search_next()
+        self.assertEqual(self.app.search_info_var.get(), "Nema rezultata")
+        self.assertEqual(self.app.log.tag_ranges("search"), ())
+
+    def test_shift_return_goes_back(self):
+        self.fill()
+        self.app.search_var.set("horvat")
+        self.app._search_prev()
+        self.assertEqual(self.app.search_info_var.get(), "2/2")
+        self.assertTrue(self.app._search_entry.bind("<Shift-Return>"))
+
+    def test_a_button_by_the_status_line_opens_the_search(self):
+        self.app.btn_search.invoke()
+        self.assertEqual(self.app.search_frame.winfo_manager(), "grid")
+
+    def test_hidden_technical_lines_are_not_found(self):
+        self.app._log_line("[1/1] Processing a.jpg ...\n", None, ("", None))
+        self.app.search_var.set("Processing")
+        self.app._search_next()
+        self.assertEqual(self.app.search_info_var.get(), "Nema rezultata")
+
 class SubfolderHintTests(AppCase):
     def nested(self) -> Path:
         inp = self.tmp / "groblje"
