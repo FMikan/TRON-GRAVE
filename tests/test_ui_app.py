@@ -1,4 +1,5 @@
 import ctypes
+import io
 import json
 import os
 import re
@@ -567,6 +568,20 @@ class StaleLockTests(RunCase):
                 self.app._on_start()
                 self.assertEqual(self.choices.call_args[0][0], "Mapa je zauzeta")
                 self.assertEqual(self.launched, [])
+
+    def test_the_lock_names_the_extractor_once_it_runs(self):
+        # The extractor can outlive a window that crashed, still finishing a photo: a new run
+        # must find a live owner in the lock and ask, not take the folder over.
+        pid = int(subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"],
+                                 capture_output=True, text=True, check=True).stdout)
+        proc = mock.Mock(pid=pid, stdout=io.StringIO(""), stderr=io.StringIO(""))
+        proc.wait.return_value = proc.poll.return_value = 0
+        with mock.patch.object(grave_ui.App, "_launch_subprocess", REAL_LAUNCH_SUBPROCESS), \
+                mock.patch.object(grave_ui.subprocess, "Popen", return_value=proc):
+            self.app._on_start()
+        self.assertTrue(self.lock().read_text(encoding="utf-8").startswith(f"{socket.gethostname()}:{pid}:"))
+        self.app._on_proc_exit(0)
+        self.assertFalse(self.lock().exists())      # the run still lets go of its own lock
 
 class ProgressTests(AppCase):
     def feed(self, *lines):

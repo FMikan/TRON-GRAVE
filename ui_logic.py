@@ -126,8 +126,8 @@ def write_settings(path: Path, data: dict) -> None:
 LOCK_NAME = ".tron-grave.lock"
 
 
-def new_lock_token() -> str:
-    return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex}"
+def new_lock_token(pid: int | None = None) -> str:
+    return f"{socket.gethostname()}:{os.getpid() if pid is None else pid}:{uuid.uuid4().hex}"
 
 
 def pid_alive(pid: int) -> bool:

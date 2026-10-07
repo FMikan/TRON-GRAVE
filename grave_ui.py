@@ -1066,6 +1066,16 @@ class App:
         else:
             self.pgid = self.proc.pid
 
+        # From here the lock names the extractor, not this window: it can outlive a window that
+        # crashed, still finishing a photo, and a new run must then find the folder busy.
+        if self.lock_path and self.lock_token:
+            token = ui_logic.new_lock_token(self.proc.pid)
+            try:
+                self.lock_path.write_text(token, encoding="utf-8")
+                self.lock_token = token
+            except OSError:
+                pass                            # the window's own token still holds the folder
+
         self.progress.configure(mode="indeterminate", maximum=100)
         self.progress.start(80)
         self._append_log(f"$ {' '.join(cmd)}\n", "raw", "info")
