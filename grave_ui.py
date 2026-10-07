@@ -19,7 +19,7 @@ from dotenv import dotenv_values
 
 import ui_logic
 from extractor.csv_writer import check_writable, read_processed, resume_problem
-from extractor.file_utils import is_heic, is_supported_image
+from extractor.file_utils import back_up_outputs, is_heic, is_supported_image
 from _version import __version__
 
 
@@ -699,8 +699,8 @@ class App:
         ttk.Label(
             frm, justify="left", foreground=THEME["MUTED"], wraplength=520,
             text="Nastavi — obradi samo preostale slike i dopiši ih.\n"
-                 "Prepiši — spremi kopiju (output.<vrijeme>.bak.csv i byhand.<vrijeme>.bak) "
-                 "i kreni ispočetka.",
+                 "Prepiši — premjesti output.csv, byhand/ i byhand_retry/ u kopije "
+                 "(*.<vrijeme>.bak) i kreni ispočetka.",
         ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
         if blocker:
             ttk.Label(frm, text=f"Nastavak nije moguć: {blocker}.", foreground=THEME["ERR"],
@@ -722,24 +722,10 @@ class App:
         return win, choice
 
     def _backup_outputs(self, out_dir: Path) -> bool:
-        """Move output.csv and byhand/ aside, with one timestamp, before a fresh run: both or neither."""
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        csv_path = out_dir / "output.csv"
-        csv_backup = out_dir / f"output.{stamp}.bak.csv"
-        csv_moved = False
+        """Move output.csv, byhand/ and byhand_retry/ aside before a fresh run: all of them or none."""
         try:
-            if csv_path.exists():
-                csv_path.replace(csv_backup)
-                csv_moved = True
-            byhand = out_dir / "byhand"
-            if byhand.is_dir():
-                byhand.rename(out_dir / f"byhand.{stamp}.bak")
+            back_up_outputs(out_dir)
         except OSError as e:
-            if csv_moved:       # byhand/ would not move (a photo open in a viewer): undo the first half
-                try:
-                    csv_backup.replace(csv_path)
-                except OSError:
-                    pass
             messagebox.showerror(
                 "Ne mogu spremiti kopiju",
                 f"{e}\n\nZatvorite output.csv i slike iz byhand/ ako su negdje otvoreni "

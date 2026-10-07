@@ -549,6 +549,18 @@ class ExistingOutputTests(RunCase):
         self.assertTrue(backups[0].startswith("byhand.") and backups[1].startswith("output."))
         self.assertNotIn("--resume", self.launched[-1])
 
+    def test_prepisi_sets_aside_the_csv_byhand_and_the_old_retry_results(self):
+        self.make_output()
+        (self.out / "byhand").mkdir()
+        (self.out / "byhand" / "p_1_x.jpg").write_bytes(b"x")
+        (self.out / "byhand_retry").mkdir()
+        init_csv(self.out / "byhand_retry" / "output.csv")
+        with mock.patch.object(grave_ui.App, "_ask_existing_output", return_value="fresh"):
+            self.app._on_start()
+        self.assertEqual(sorted(p.name.split(".")[0] for p in self.out.iterdir() if ".bak" in p.name),
+                         ["byhand", "byhand_retry", "output"])
+        self.assertFalse((self.out / "byhand_retry").exists())
+
     def test_the_two_backups_share_one_timestamp(self):
         self.make_output()
         (self.out / "byhand").mkdir()

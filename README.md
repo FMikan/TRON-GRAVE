@@ -24,7 +24,7 @@ Designed for digitizing Croatian cemetery records, with full support for Croatia
 - **Notes column** — every edge case (uncertain year, missing field, non-standard filename) is explained inline in the CSV's `Notes` column
 - **Real-time progress & live cost counter** — GUI shows progress bar, the photo being processed, ETA, and the *real* running API cost (computed from each response's actual token usage, not an estimate). The log reads in Croatian, coloured by verdict (OK / za pregled / neuspjelo); **Tehnički zapis** switches it to the extractor's own lines
 - **End-of-run summary** — a popup with OK / for-review / failed counts, the most common review reasons among this run's flagged photos, the total cost, and a button to open the CSV; the window comes back to the front (taskbar flash on Windows)
-- **Resume interrupted runs** — when the output folder already has an output.csv, **Pokreni** asks **Nastavi** (resume) / **Prepiši** (move output.csv and byhand/ aside and start over) / **Odustani**; a resume never re-sends a photo the model already answered
+- **Resume interrupted runs** — when the output folder already has an output.csv, **Pokreni** asks **Nastavi** (resume) / **Prepiši** (move output.csv, byhand/ and byhand_retry/ aside and start over) / **Odustani**; a resume never re-sends a photo the model already answered
 - **Ponovi byhand/** — re-runs just the `byhand/` photos with Claude Opus 5.5 at high effort, or your selected model/effort if stronger, into `byhand_retry/`; it asks before touching earlier retry results and can be resumed
 - **Automatic retries** — retries failed API calls with exponential backoff; the run stops (and can be resumed later) on a billing error, the monthly spend cap, or three API failures in a row
 - **Settings persistence** — remembers folders, model and effort; the API key is stored only when you click **Spremi**, in an owner-only file (`%APPDATA%\tron-grave` on Windows, `~/Library/Application Support/tron-grave` on macOS, `~/.config/tron-grave` on Linux — or `$XDG_CONFIG_HOME/tron-grave` when that is set)
@@ -325,8 +325,8 @@ and the closing lines report the run's total: `Total cost: $2.35`.
 
 **Resume an interrupted run.** If a run is stopped (Ctrl+C, the GUI's **Zaustavi** button, closing
 the window, or a crash), start it again on the same output folder. In the GUI, when that folder
-already has an `output.csv`, **Pokreni** asks **Nastavi** (resume) / **Prepiši** (move `output.csv`
-and `byhand/` aside and start over) / **Odustani**; on the CLI, pass `--resume`. Resume reads the
+already has an `output.csv`, **Pokreni** asks **Nastavi** (resume) / **Prepiši** (move `output.csv`,
+`byhand/` and `byhand_retry/` aside and start over) / **Odustani**; on the CLI, pass `--resume`. Resume reads the
 `.processed` file, skips the photos listed there, and appends the rest to `output.csv` instead of
 overwriting it, so you don't pay to reprocess photos the model already answered. Photos that got
 no answer (for example the API call failed or the file could not be read) are left out of
