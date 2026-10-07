@@ -685,6 +685,24 @@ class ExistingOutputTests(RunCase):
             self.app._on_start()
         self.assertIn("prazan", ask.call_args[0][4])
 
+    def test_when_every_photo_is_done_nastavi_explains_and_otvori_csv_ends_it(self):
+        self.make_output(processed=("p_1_x.jpg", "p_2_x.jpg"))
+        with mock.patch.object(grave_ui.App, "_ask_existing_output", return_value="open") as ask, \
+                mock.patch.object(grave_ui.App, "_open_csv") as open_csv:
+            self.app._on_start()
+        self.assertEqual(ask.call_args[0][2:], (2, 2, ui_logic.ALL_DONE))
+        open_csv.assert_called_once_with(self.out / "output.csv")
+        self.assertEqual(self.launched, [])
+        self.assertFalse(self.lock().exists())
+
+    def test_the_all_done_dialog_greys_nastavi_and_offers_the_csv(self):
+        win, choice = self.app._build_existing_output_dialog(Path("x/output.csv"), 2, 2, 2, ui_logic.ALL_DONE)
+        self.addCleanup(lambda: win.winfo_exists() and win.destroy())
+        self.assertEqual(str(win.btn_resume.cget("state")), "disabled")
+        self.assertIs(win.default_button, win.btn_cancel)
+        win.btn_open.invoke()
+        self.assertEqual(choice["value"], "open")
+
     def test_the_dialog_greys_out_nastavi_when_blocked(self):
         win, choice = self.app._build_existing_output_dialog(Path("x/output.csv"), 3, 1, 2, "razlog")
         self.assertEqual(str(win.btn_resume.cget("state")), "disabled")

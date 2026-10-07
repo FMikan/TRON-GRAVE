@@ -655,11 +655,16 @@ class App:
             names = {f.name for f in in_dir.iterdir() if f.is_file() and is_supported_image(f)}
         except OSError:
             names = set()
+        done, total = len(names & processed), len(names)
         problem = resume_problem(out_dir)
-        return self._ask_existing_output(
-            csv_path, ui_logic.csv_data_rows(csv_path), len(names & processed), len(names),
-            ui_logic.RESUME_BLOCKERS.get(problem) if problem else None,
-        )
+        blocker = ui_logic.RESUME_BLOCKERS.get(problem) if problem else None
+        if blocker is None and total and done == total:
+            blocker = ui_logic.ALL_DONE
+        answer = self._ask_existing_output(csv_path, ui_logic.csv_data_rows(csv_path), done, total, blocker)
+        if answer == "open":
+            self._open_csv(csv_path)
+            return None
+        return answer
 
     def _ask_existing_output(self, csv_path: Path, rows: int, done: int, total: int,
                              blocker: str | None) -> str | None:
@@ -743,36 +748,38 @@ class App:
             choice["value"] = value
             win.destroy()
 
+        all_done = blocker == ui_logic.ALL_DONE
         frm = ttk.Frame(win, padding=16)
         frm.grid(row=0, column=0, sticky="nsew")
         ttk.Label(
             frm, justify="left", wraplength=520,
             text=f"{csv_path} već postoji (redaka: {rows}).\n"
                  f"Već obrađeno: {done}/{total} slika iz ulazne mape.",
-        ).grid(row=0, column=0, columnspan=3, sticky="w")
+        ).grid(row=0, column=0, columnspan=4, sticky="w")
         ttk.Label(
             frm, justify="left", foreground=THEME["MUTED"], wraplength=520,
             text="Nastavi — obradi samo preostale slike i dopiši ih.\n"
                  "Prepiši — premjesti output.csv, byhand/ i byhand_retry/ u kopije "
                  "(*.<vrijeme>.bak) i kreni ispočetka.",
-        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(8, 0))
         if blocker:
             ttk.Label(frm, text=f"Nastavak nije moguć: {blocker}.", foreground=THEME["ERR"],
-                      wraplength=520, justify="left").grid(row=2, column=0, columnspan=3,
+                      wraplength=520, justify="left").grid(row=2, column=0, columnspan=4,
                                                            sticky="w", pady=(8, 0))
         win.btn_resume = ttk.Button(frm, text="Nastavi", style="Accent.TButton",
                                     command=lambda: pick("resume"),
                                     state="disabled" if blocker else "normal")
         win.btn_fresh = ttk.Button(frm, text="Prepiši", command=lambda: pick("fresh"))
         win.btn_cancel = ttk.Button(frm, text="Odustani", command=lambda: pick(None))
-        win.btn_resume.grid(row=3, column=0, padx=(0, 6), pady=(14, 0))
-        win.btn_fresh.grid(row=3, column=1, padx=6, pady=(14, 0))
-        win.btn_cancel.grid(row=3, column=2, padx=(6, 0), pady=(14, 0))
-        win.bind("<Return>", lambda _e: self._press_focused(
-            win, [win.btn_resume, win.btn_fresh, win.btn_cancel]))
+        win.btn_open = ttk.Button(frm, text="Otvori CSV", command=lambda: pick("open")) if all_done else None
+        buttons = [b for b in (win.btn_resume, win.btn_fresh, win.btn_open, win.btn_cancel) if b is not None]
+        for col, button in enumerate(buttons):
+            button.grid(row=3, column=col, padx=(0 if col == 0 else 6, 0), pady=(14, 0))
+        win.default_button = win.btn_cancel if all_done else win.btn_fresh if blocker else win.btn_resume
+        win.default_button.focus_set()
+        win.bind("<Return>", lambda _e: self._press_focused(win, buttons))
         win.bind("<Escape>", lambda _e: pick(None))
         win.protocol("WM_DELETE_WINDOW", lambda: pick(None))
-        (win.btn_fresh if blocker else win.btn_resume).focus_set()
         return win, choice
 
     def _backup_outputs(self, out_dir: Path) -> bool:

@@ -333,6 +333,8 @@ RESUME_BLOCKERS = {
     "not-utf8": "output.csv više nije u UTF-8 zapisu (ponovno je spremljen iz Excela ili uređivača "
                 "kao ANSI) — spremite ga kao UTF-8 ili krenite ispočetka",
 }
+# Shown the same way as a RESUME_BLOCKERS reason: Nastavi has nothing left to do.
+ALL_DONE = "sve slike iz ulazne mape već su obrađene"
 
 # The extractor's fatal errors read "error: [tag] ...".
 FATAL_TAG_RE = re.compile(r"^error: \[([a-z0-9-]+)\] ")
