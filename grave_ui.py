@@ -565,12 +565,12 @@ class App:
         csv_path = out_dir / "output.csv"
         processed = read_processed(out_dir)
         if not csv_path.exists():
-            if processed and not messagebox.askyesno(
+            if processed and self._ask_choice(
                 "Nedostaje output.csv",
                 f"output.csv nedostaje, ali .processed bilježi obrađene slike (ukupno: {len(processed)}).\n\n"
-                "Ako krenete ispočetka, te će se slike ponovno poslati API-ju i ponovno platiti.\n\n"
-                "Svejedno krenuti ispočetka?",
-            ):
+                "Ako krenete ispočetka, te će se slike ponovno poslati API-ju i ponovno platiti.",
+                [("fresh", "Kreni ispočetka"), ("cancel", "Odustani")], default="cancel",
+            ) != "fresh":
                 return None
             return "fresh"
         try:
@@ -607,6 +607,55 @@ class App:
         bare Toplevel opens wherever the window manager puts it (top-left on Windows)."""
         self.root.tk.call("tk::PlaceWindow", str(win), "widget", str(self.root))
 
+    @staticmethod
+    def _press_focused(win, buttons, fallback=None) -> None:
+        """Return presses the focused button, as Space already does (ttk binds only Space)."""
+        try:
+            focused = win.focus_get()
+        except KeyError:            # focus sits in a widget tkinter did not create
+            focused = None
+        target = focused if focused in buttons else fallback
+        if target is not None and str(target.cget("state")) != "disabled":
+            target.invoke()
+
+    def _build_choice_dialog(self, title: str, text: str, choices: list[tuple[str, str]],
+                             default: str):
+        """A question answered by verb buttons; the first choice is the action."""
+        win = self._dialog(title)
+        choice = {"value": None}
+
+        def pick(value):
+            choice["value"] = value
+            win.destroy()
+
+        frm = ttk.Frame(win, padding=16)
+        frm.grid(row=0, column=0, sticky="nsew")
+        ttk.Label(frm, text=text, justify="left", wraplength=520).grid(
+            row=0, column=0, columnspan=len(choices), sticky="w")
+        win.buttons = {}
+        for col, (key, label) in enumerate(choices):
+            button = ttk.Button(frm, text=label, command=lambda k=key: pick(k),
+                                style="Accent.TButton" if col == 0 else "TButton")
+            button.grid(row=1, column=col, padx=(0 if col == 0 else 6, 0), pady=(14, 0), sticky="w")
+            win.buttons[key] = button
+        win.default_button = win.buttons[default]
+        win.default_button.focus_set()
+        win.bind("<Return>", lambda _e: self._press_focused(win, list(win.buttons.values()),
+                                                            win.default_button))
+        win.bind("<Escape>", lambda _e: pick(None))
+        win.protocol("WM_DELETE_WINDOW", lambda: pick(None))
+        return win, choice
+
+    def _ask_choice(self, title: str, text: str, choices: list[tuple[str, str]],
+                    default: str) -> str | None:
+        """Ask with verb buttons and wait: the chosen key, or None for Esc and the close box."""
+        win, choice = self._build_choice_dialog(title, text, choices, default)
+        self._present(win)
+        win.wait_visibility()
+        win.grab_set()
+        self.root.wait_window(win)
+        return choice["value"]
+
     def _build_existing_output_dialog(self, csv_path: Path, rows: int, done: int, total: int,
                                       blocker: str | None):
         win = self._dialog("output.csv već postoji")
@@ -641,6 +690,8 @@ class App:
         win.btn_resume.grid(row=3, column=0, padx=(0, 6), pady=(14, 0))
         win.btn_fresh.grid(row=3, column=1, padx=6, pady=(14, 0))
         win.btn_cancel.grid(row=3, column=2, padx=(6, 0), pady=(14, 0))
+        win.bind("<Return>", lambda _e: self._press_focused(
+            win, [win.btn_resume, win.btn_fresh, win.btn_cancel]))
         win.bind("<Escape>", lambda _e: pick(None))
         win.protocol("WM_DELETE_WINDOW", lambda: pick(None))
         (win.btn_fresh if blocker else win.btn_resume).focus_set()
@@ -688,11 +739,11 @@ class App:
 
     def _take_lock(self, out_dir: Path) -> bool:
         lock = out_dir / ui_logic.LOCK_NAME
-        if lock.exists() and not messagebox.askyesno(
+        if lock.exists() and self._ask_choice(
             "Mapa je zauzeta",
-            f"{lock} postoji.\n\n"
-            "Možda neka druga obrada već koristi ovu izlaznu mapu. Svejedno nastaviti?",
-        ):
+            f"{lock} postoji.\n\nMožda neka druga obrada upravo koristi ovu izlaznu mapu.",
+            [("use", "Svejedno koristi mapu"), ("cancel", "Odustani")], default="cancel",
+        ) != "use":
             return False
         token = ui_logic.new_lock_token()
         try:
@@ -1125,7 +1176,7 @@ class App:
         model, effort = ui_logic.retry_settings(self._model_id(), self._effort_id())
         cost, _secs, _measured = ui_logic.estimate(self._settings.get("stats"), model, effort, n)
         retry_out = out_dir / "byhand_retry"
-        if not messagebox.askyesno(
+        if self._ask_choice(
             "Ponovna obrada",
             f"Ponovno obraditi slike iz byhand/ (ukupno: {n})?\n\n"
             f"Model: {ui_logic.MODEL_LABELS.get(model, model)}, "
@@ -1133,7 +1184,8 @@ class App:
             f"Procjena: ~${cost:.2f}\n\n"
             "Ovo su novi, plaćeni API pozivi. Rezultati idu u zasebnu mapu:\n"
             f"{retry_out}",
-        ):
+            [("run", "Pokreni ponovnu obradu"), ("cancel", "Odustani")], default="run",
+        ) != "run":
             return
 
         api_key = self._resolve_api_key()
@@ -1153,10 +1205,12 @@ class App:
             running = self.proc.poll() is None
             if running:
                 done = self.counters["ok"] + self.counters["partial"] + self.counters["failed"]
-                if not messagebox.askyesno(
+                if self._ask_choice(
                     "Obrada u tijeku",
-                    f"Obrada je u tijeku (gotovo: {done}).\nIzaći i zaustaviti obradu?",
-                ):
+                    f"Obrada je u tijeku (gotovo: {done}).\n"
+                    "Zatvaranjem se obrada zaustavlja; već obrađene slike ostaju spremljene.",
+                    [("stop", "Zaustavi i zatvori"), ("cancel", "Nastavi obradu")], default="cancel",
+                ) != "stop":
                     return
             # Close only once the run's exit is handled (its stats saved), even if the extractor
             # has already ended and only that is left. A running one is stopped on a worker thread

@@ -38,10 +38,19 @@ class AppCase(unittest.TestCase):
             "unexpected Nastavi/Prepiši/Odustani dialog: patch _ask_existing_output in this test")))
         # Placing a dialog maps it; a test must never flash a window.
         self._patch(grave_ui.App, "_present", mock.Mock())
+        # Every _ask_choice question answers with its action (the first choice) unless a test
+        # calls self.answer(...): the old askyesno -> True.
+        self.choices = self._patch(grave_ui.App, "_ask_choice", mock.Mock(
+            side_effect=lambda title, text, choices, default=None: choices[0][0]))
         self.launched = []
         self._patch(grave_ui.App, "_launch_subprocess", lambda app, cmd: self.launched.append(cmd))
         self._patch(grave_ui.ui_logic, "LEGACY_SETTINGS_PATH", self.tmp / "legacy" / "ui.json")
         self.app = grave_ui.App(self.root)
+
+    def answer(self, key):
+        """Make every _ask_choice question answer `key` (None is Esc or the close box)."""
+        self.choices.side_effect = None
+        self.choices.return_value = key
 
     def _patch(self, target, attribute, value):
         patcher = mock.patch.object(target, attribute, value)

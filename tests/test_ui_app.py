@@ -207,6 +207,44 @@ class DialogPlacementTests(AppCase):
             REAL_ASK_EXISTING_OUTPUT(self.app, csv_path, 1, 1, 2, None)
         self.app._present.assert_called_once_with(shown[0])
 
+
+class ChoiceDialogTests(AppCase):
+    def build(self, default="cancel"):
+        win, choice = self.app._build_choice_dialog(
+            "Mapa je zauzeta", "X postoji.", [("use", "Svejedno koristi mapu"), ("cancel", "Odustani")], default)
+        self.addCleanup(lambda: win.winfo_exists() and win.destroy())
+        return win, choice
+
+    def test_the_buttons_say_what_they_do_and_the_first_one_is_the_action(self):
+        win, choice = self.build()
+        self.assertEqual([str(b.cget("text")) for b in win.buttons.values()], ["Svejedno koristi mapu", "Odustani"])
+        self.assertEqual(str(win.buttons["use"].cget("style")), "Accent.TButton")
+        win.buttons["use"].invoke()
+        self.assertEqual(choice["value"], "use")
+        self.assertFalse(win.winfo_exists())
+
+    def test_return_and_escape_are_bound_and_the_default_is_the_safe_choice(self):
+        win, _choice = self.build(default="cancel")
+        self.assertIs(win.default_button, win.buttons["cancel"])
+        self.assertTrue(win.bind("<Return>"))
+        self.assertTrue(win.bind("<Escape>"))
+
+    def test_the_close_box_answers_none(self):
+        win, choice = self.build()
+        choice["value"] = "use"
+        win.tk.call(win.protocol("WM_DELETE_WINDOW"))
+        self.assertIsNone(choice["value"])
+
+    def test_return_presses_the_focused_button_or_the_default(self):
+        win, choice = self.build(default="cancel")
+        buttons = list(win.buttons.values())
+        with mock.patch.object(win, "focus_get", return_value=win.buttons["use"]):
+            grave_ui.App._press_focused(win, buttons, win.default_button)
+        self.assertEqual(choice["value"], "use")
+
+    def test_no_yes_no_box_is_left(self):
+        self.assertNotIn("askyesno", Path(grave_ui.__file__).read_text(encoding="utf-8"))
+
 class FontTests(AppCase):
     def test_windows_fonts_are_used_where_installed(self):
         with mock.patch.object(grave_ui.tkfont, "families",
@@ -535,12 +573,13 @@ class ExistingOutputTests(RunCase):
     def test_a_missing_csv_with_a_processed_list_warns_first(self):
         self.out.mkdir(parents=True)
         (self.out / ".processed").write_text("p_1_x.jpg\n", encoding="utf-8")
-        self.dialogs["askyesno"].return_value = False
+        self.answer("cancel")
         self.app._on_start()
-        title, body = self.dialogs["askyesno"].call_args[0]
+        (title, body, choices), kwargs = self.choices.call_args
         self.assertEqual(title, "Nedostaje output.csv")
-        self.assertIn("Svejedno krenuti ispočetka?", body)       # says what Da does
-        self.assertNotIn("Nastaviti?", body)
+        self.assertIn("ponovno platiti", body)
+        self.assertEqual(choices, [("fresh", "Kreni ispočetka"), ("cancel", "Odustani")])
+        self.assertEqual(kwargs, {"default": "cancel"})          # Enter must not pay twice
         self.assertEqual(self.launched, [])
         self.assertFalse(self.lock().exists())
 
@@ -549,8 +588,8 @@ class ExistingOutputTests(RunCase):
         (self.out / ".processed").write_text("p_1_x.jpg\n", encoding="utf-8")
         (self.out / "byhand").mkdir()
         (self.out / "byhand" / "p_1_x.jpg").write_bytes(b"x")
-        self.app._on_start()                                   # the harness answers Da
-        self.assertEqual(self.dialogs["askyesno"].call_args[0][0], "Nedostaje output.csv")
+        self.app._on_start()                                   # the harness answers Kreni ispočetka
+        self.assertEqual(self.choices.call_args[0][0], "Nedostaje output.csv")
         self.assertNotIn("--resume", self.launched[-1])
         self.assertEqual(len(list(self.out.glob("byhand.*.bak"))), 1)
         self.assertFalse((self.out / "byhand").exists())
@@ -761,7 +800,7 @@ class RetryTests(RunCase):
     def test_retry_shows_model_and_estimate_then_runs_into_byhand_retry(self):
         self.app.model_var.set(ui_logic.MODEL_LABELS["claude-fable-5-1"])
         self.app._on_retry_byhand()
-        body = self.dialogs["askyesno"].call_args[0][1]
+        body = self.choices.call_args[0][1]
         self.assertIn("Claude Fable 5.1", body)
         self.assertIn("Procjena: ~$", body)
         cmd = self.launched[-1]
@@ -1018,7 +1057,7 @@ class CloseTests(AppCase):
                 mock.patch.object(self.root, "destroy"):
             self.app._on_close()
             self.app._on_close()                      # a second click while the extractor stops
-        self.dialogs["askyesno"].assert_called_once()
+        self.choices.assert_called_once()
         self.assertTrue(self.app._closing)
         self.assertTrue(self.app._stop_requested)     # so the exit counts as a stop, and its stats are kept
         self.app.proc = None
@@ -1067,8 +1106,8 @@ class CloseTests(AppCase):
         destroy.assert_called_once()
         stats = json.loads(self.settings_path.read_text(encoding="utf-8"))["stats"]
         self.assertEqual(stats["claude-sonnet-5|high"]["n"], 1)
-        self.dialogs["askyesno"].assert_called_once()  # only the "Izaći i zaustaviti obradu?" question
-        for name in ("showinfo", "showwarning", "showerror", "askyesnocancel"):
+        self.choices.assert_called_once()             # only the close question
+        for name in self.dialogs:
             with self.subTest(dialog=name):
                 self.dialogs[name].assert_not_called()
         self.app._draw_attention.assert_not_called()
@@ -1126,7 +1165,7 @@ class CloseTests(AppCase):
         with mock.patch.object(grave_ui.threading, "Thread") as thread, \
                 mock.patch.object(self.root, "destroy") as destroy:
             self.app._on_close()
-            self.dialogs["askyesno"].assert_not_called()      # nothing left to stop, so nothing to ask
+            self.choices.assert_not_called()          # nothing left to stop, so nothing to ask
             thread.assert_not_called()
             destroy.assert_not_called()               # _on_proc_exit has not recorded the run yet
             self.app._on_proc_exit(0)
@@ -1145,7 +1184,7 @@ class CloseTests(AppCase):
         self.app._set_running(True)
         self.app.proc = mock.Mock()
         self.app.proc.poll.return_value = None
-        self.dialogs["askyesno"].return_value = False
+        self.answer("cancel")
         with mock.patch.object(grave_ui.threading, "Thread") as thread, \
                 mock.patch.object(self.root, "destroy") as destroy:
             self.app._on_close()
@@ -1160,7 +1199,7 @@ class CloseTests(AppCase):
         with mock.patch.object(self.root, "destroy") as destroy:
             self.app._on_close()
         destroy.assert_called_once()
-        self.dialogs["askyesno"].assert_not_called()
+        self.choices.assert_not_called()
 
 
 class WindowsStopTests(AppCase):
