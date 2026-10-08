@@ -293,7 +293,8 @@ Options:
                      run refuses an output folder whose output.csv has rows. Refuses (exit 1)
                      when the input folder is inside a folder it would move.
   --verbose          Show detailed per-image progress
-  --dry-run          List discovered images without making any API calls
+  --dry-run          List discovered images without making any API calls. Exits 1 with
+                     error: [no-images] when there are none.
 ```
 
 The model can also be set with the `CLAUDE_MODEL` environment variable; the `--model` flag takes precedence.
