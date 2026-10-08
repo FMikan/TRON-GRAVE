@@ -132,13 +132,36 @@ class RobustnessTests(CliCase):
         self.assertIn("locked", err)
         self.assertEqual(len(self.rows()), 1)
 
-    def test_a_lock_that_never_lifts_stops_the_run_after_30_seconds(self):
+    def test_a_lock_on_unpaid_rows_stops_the_run_after_30_seconds(self):
+        # An API failure is not billed, so its row can be given up on: the resume sends it again.
         self.add_image("p_1_x.jpg")
         with mock.patch.object(grave_extractor, "append_rows", side_effect=PermissionError("locked")):
-            code, _, err, _ = self.run_cli(message(answer(record())))
+            code, _, err, _ = self.run_cli(api_error(400))
         self.assertEqual(code, 1)
         self.assertIn("[csv-locked]", err)
         self.assertEqual(time.sleep.call_args_list, [mock.call(2)] * 15)
+
+    def test_a_paid_answer_waits_for_the_lock_past_30_seconds(self):
+        # Excel opened during the call and kept open for 80 s: giving up would throw the paid
+        # answer away, and the resume would pay for the photo again.
+        self.add_image("p_1_x.jpg")
+        real_append = grave_extractor.append_rows
+        calls = []
+
+        def locked_for_80_s(path, rows):
+            calls.append(1)
+            if len(calls) <= 40:
+                raise PermissionError("locked")
+            real_append(path, rows)
+
+        with mock.patch.object(grave_extractor, "append_rows", side_effect=locked_for_80_s):
+            code, out, err, _ = self.run_cli(message(answer(record())))
+        self.assertEqual(code, 0)
+        self.assertEqual(len(self.rows()), 1)
+        self.assertIn("p_1_x.jpg", read_processed(self.out))
+        self.assertRegex(out, r"OK: p_1_x\.jpg \(1 record\) — \$\d+\.\d{4} \(total: ")
+        self.assertEqual(err.count("already paid for"), 3)           # at 0, 30 and 60 s
+        self.assertEqual(time.sleep.call_count, 40)
 
     def test_a_failed_byhand_copy_is_only_a_warning(self):
         self.add_image("p_1_x.jpg")

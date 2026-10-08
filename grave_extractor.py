@@ -29,7 +29,8 @@ DEFAULT_MODEL = "claude-sonnet-5"
 # Consecutive API failures that end the run: an account-level problem (spend limit, billing,
 # outage) fails every image the same way, and carrying on would only log blank rows.
 MAX_CONSECUTIVE_API_FAILURES = 3
-# How long to wait out a locked output.csv (Excel on Windows) before stopping: 15 x 2 s.
+# How long to wait out a locked output.csv (Excel on Windows) before stopping: 15 x 2 s. A paid
+# answer is waited for until the lock lifts (see write_rows).
 CSV_LOCK_RETRIES = 15
 CSV_LOCK_POLL_SECS = 2
 
@@ -81,18 +82,25 @@ def has_rows(output_csv: Path) -> bool:
         return output_csv.exists()
 
 
-def write_rows(output_csv: Path, rows: list[list]) -> None:
-    """Append rows, waiting out a lock (Excel on Windows) for up to 30 s before giving up."""
-    for attempt in range(CSV_LOCK_RETRIES + 1):
+def write_rows(output_csv: Path, rows: list[list], paid: bool) -> None:
+    """Append rows, waiting out a lock (Excel on Windows): 30 s, or for paid rows until it lifts.
+
+    Giving up on a paid answer would throw it away, and the resume would pay for it again.
+    """
+    attempt = 0
+    while True:
         try:
             append_rows(output_csv, rows)
             return
         except OSError as e:
-            if attempt == CSV_LOCK_RETRIES:
+            if attempt == CSV_LOCK_RETRIES and not paid:
                 fatal(f"Cannot write to {output_csv} ({e}). Close it (e.g. in Excel) and resume.", "csv-locked")
-            if attempt == 0:
-                print(f"warning: {output_csv} is locked (open in Excel?) — close it; retrying for "
-                      f"{CSV_LOCK_RETRIES * CSV_LOCK_POLL_SECS} s", file=sys.stderr, flush=True)
+            if attempt % CSV_LOCK_RETRIES == 0:
+                wait = ("waiting until it is closed: this photo is already paid for" if paid
+                        else f"retrying for {CSV_LOCK_RETRIES * CSV_LOCK_POLL_SECS} s")
+                print(f"warning: {output_csv} is locked (open in Excel?) — close it; {wait}",
+                      file=sys.stderr, flush=True)
+            attempt += 1
             time.sleep(CSV_LOCK_POLL_SECS)
 
 
@@ -270,7 +278,7 @@ def main() -> int:
         if not matched:
             had_any_issue = True
 
-        write_rows(output_csv, result.rows)
+        write_rows(output_csv, result.rows, result.billed)
 
         if result.status == "full_success":
             # A resumed photo that now reads fine no longer needs its review copy.

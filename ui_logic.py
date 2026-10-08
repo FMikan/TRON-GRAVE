@@ -218,6 +218,9 @@ _REASON_PREFIXES_HR = (
 _WARNINGS_HR = (
     (re.compile(r"^warning: skipping (\d+) \.heic/\.heif file\(s\)"),
      "Upozorenje: preskočeno HEIC/HEIF datoteka: {0} — pretvorite ih u JPG."),
+    (re.compile(r"^warning: .*output\.csv is locked.*already paid for$"),
+     "Upozorenje: output.csv je zaključan (otvoren u Excelu?) — zatvorite ga; obrada čeka da spremi "
+     "već plaćenu sliku."),
     (re.compile(r"^warning: .*output\.csv is locked"),
      "Upozorenje: output.csv je zaključan (otvoren u Excelu?) — zatvorite ga; pokušavam još 30 s."),
     (re.compile(r"^warning: could not copy (.+) to byhand/"), "Upozorenje: ne mogu kopirati {0} u byhand/."),
