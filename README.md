@@ -282,11 +282,13 @@ Options:
   --resume           Skip photos listed in the output folder's .processed file and append to
                      output.csv. Refuses (exit 1, error: [resume-refused]) when that would
                      re-send finished photos: an output.csv with other columns (from an older
-                     version, or re-saved from Excel), output.csv rows without .processed, or
+                     version, or re-saved from Excel), output.csv rows without .processed,
                      .processed without output.csv (or with an output.csv emptied to its
-                     header); an output.csv or .processed that can't be read (a network
-                     drive or OneDrive that dropped out), or an output.csv that is no longer
-                     UTF-8 (re-saved as ANSI by Excel or an editor), is refused too.
+                     header), or an output.csv that is no longer UTF-8 (re-saved as ANSI by
+                     Excel or an editor). An output.csv or .processed that can't be read
+                     (mostly a network drive or OneDrive that dropped out) is refused with
+                     error: [resume-unreadable]: reconnect and resume, or start a fresh run
+                     if it persists.
                      With --dry-run, lists only the photos that would run.
   --overwrite        Start fresh even though output.csv has rows: output.csv, byhand/ and
                      byhand_retry/ are first moved aside as output.<time>.bak.csv,
@@ -330,9 +332,9 @@ and the closing lines report the run's total: `Total cost: $2.35`.
   images in the input folder, an output.csv with rows and neither `--resume` nor `--overwrite`,
   unwritable output folder); stderr then reads `error: [tag] …`, where the tag is `api-401`,
   `api-402`, `api-403`, `api-404`, `spend-cap`, `api-down`, `csv-locked`, `resume-refused`,
-  `input-is-byhand`, `no-images` or `output-exists` (a missing key or input folder, an
-  unwritable output folder, or an input folder that `--overwrite` would move prints a plain
-  `error: …`)
+  `resume-unreadable`, `input-is-byhand`, `no-images` or `output-exists` (a missing key or
+  input folder, an unwritable output folder, or an input folder that `--overwrite` would move
+  prints a plain `error: …`)
 - `130` — Interrupted by user (Ctrl+C)
 
 ---

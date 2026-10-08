@@ -32,6 +32,7 @@ Fixes from the 7 October 2026 QA & UI/UX review and the 8 October 2026 code revi
 - Learned estimates count only billed photos and their own time (QA-24).
 
 ### Changed
+- CLI: a resume refused because output.csv or .processed can't be read exits with `[resume-unreadable]` instead of `[resume-refused]`, and the GUI says to check the connection before suggesting Prepiši (CR-04).
 - CLI: `--dry-run` and `--resume` on an input folder without photos now exit 1 with `[no-images]`; 3.6.0 exited 0 (QA-01).
 - One Otvori menu replaces the two open buttons; Probni prolaz is its own button; the retry button reads "Ponovno obradi jačim modelom…" (QA-15).
 - The checkbox, the log border and the version label follow the dark theme (QA-16).

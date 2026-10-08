@@ -776,6 +776,18 @@ class ProgressTests(AppCase):
                 if not hint:
                     self.assertEqual(body, body.rstrip())    # no dangling blank line
 
+    def test_an_unreadable_folder_is_told_to_reconnect_before_starting_over(self):
+        # Mostly a dropped network drive or OneDrive: Prepiši would pay for every photo again.
+        self.app._reset_run_state()
+        self.app._handle_line("stderr", "error: [resume-unreadable] output.csv or .processed can't be "
+                                        "read (on a network drive or OneDrive, check the connection), "
+                                        "so this run can't be resumed now.\n")
+        self.app._on_proc_exit(1)
+        body = self.dialogs["showerror"].call_args[0][1]
+        self.assertIn("provjerite vezu", body)
+        self.assertLess(body.index("provjerite vezu"), body.index("Prepiši"))
+        self.assertNotIn(ui_logic.RESUMED_FREE, body)       # Prepiši would pay again
+
     def test_every_verdict_is_counted_and_review_photos_are_remembered_until_the_next_run(self):
         self.app._reset_run_state()
         self.feed("[1/4] Processing a.jpg ...", "[1/4] OK: a.jpg (1 record) — $0.0100 (total: $0.01)",

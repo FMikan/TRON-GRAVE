@@ -1377,8 +1377,10 @@ class App:
         where = "byhand_retry/output.csv" if is_retry else "output.csv"
         fatal = ui_logic.FATAL_TAG_RE.match(self._last_stderr)
         tag = fatal.group(1) if fatal else None
-        # A dry run saved nothing to resume, and Nastavi cannot cure these errors.
-        resumable = not is_dry and tag not in ("resume-refused", "input-is-byhand", "no-images", "output-exists")
+        # A dry run saved nothing to resume, and Nastavi cannot cure these errors (an unreadable
+        # folder's own text says when it can: its other way out, Prepiši, pays again).
+        resumable = not is_dry and tag not in ("resume-refused", "resume-unreadable", "input-is-byhand",
+                                               "no-images", "output-exists")
         self._outcome_shown = True
         # Carries its own blank line, so a dialog without it does not end on one.
         resume_hint = (f"\n\nZa nastavak kliknite {again} i odaberite Nastavi — već obrađene slike "

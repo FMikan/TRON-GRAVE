@@ -121,10 +121,14 @@ _RESUME_REFUSALS = {
 
 
 def resume_filter(output_dir: Path) -> set[str]:
-    """Filenames --resume skips; exits with [resume-refused] instead of silently re-sending."""
+    """Filenames --resume skips; exits with [resume-refused] instead of silently re-sending.
+
+    An unreadable folder gets [resume-unreadable]: mostly a dropped network drive or OneDrive,
+    where trying again is the cure and starting over would pay for every photo again.
+    """
     problem = resume_problem(output_dir)
     if problem:
-        fatal(_RESUME_REFUSALS[problem], "resume-refused")
+        fatal(_RESUME_REFUSALS[problem], "resume-unreadable" if problem == "unreadable" else "resume-refused")
     return read_processed(output_dir)
 
 

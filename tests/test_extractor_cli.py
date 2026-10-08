@@ -297,7 +297,7 @@ class ResumeTests(CliCase):
         with mock.patch.object(Path, "read_text", offline):
             code, _, err, client = self.run_cli(message(answer(record())), args=("--resume",))
         self.assertEqual((code, client.calls), (1, []))
-        self.assertIn("[resume-refused]", err)
+        self.assertIn("[resume-unreadable]", err)       # not [resume-refused]: retry, don't start over
         self.assertEqual((self.out / "output.csv").read_bytes(), before)
 
     def test_a_fresh_run_clears_old_byhand_copies(self):

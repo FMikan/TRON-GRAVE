@@ -407,6 +407,7 @@ FATAL_EXPLANATIONS = {
     "api-down": "API tri puta zaredom nije uspio. Provjerite internetsku vezu, stanje računa i limite potrošnje.",
     "csv-locked": "output.csv je zaključan — zatvorite ga (npr. u Excelu).",
     "resume-refused": "Nastavak nije moguć za ovu izlaznu mapu.",
+    "resume-unreadable": "output.csv ili .processed se ne može pročitati, pa nastavak trenutno nije moguć.",
     "input-is-byhand": "Ulazna mapa ne smije biti byhand/ mapa izlazne mape.",
     "no-images": "Ulazna mapa nema podržanih slika.",
     "output-exists": "U izlaznoj mapi već postoji output.csv s rezultatima.",
@@ -430,6 +431,9 @@ FATAL_ACTIONS = {
     "api-down": "Provjerite internetsku vezu, zatim {again} → Nastavi.",
     "csv-locked": "Zatvorite output.csv (npr. u Excelu), zatim {again} → Nastavi.",
     "resume-refused": "Kliknite {again} i odaberite Prepiši; stare datoteke spremaju se kao kopija.",
+    "resume-unreadable": "Ako je mapa na mrežnom disku ili OneDriveu, provjerite vezu, zatim {again} → Nastavi. "
+                         "Ako se ponavlja, kliknite {again} i odaberite Prepiši; stare datoteke spremaju se "
+                         "kao kopija.",
     "input-is-byhand": "Odaberite drugu izlaznu mapu.",
     "no-images": "Odaberite mapu sa slikama .jpg, .jpeg, .png ili .webp.",
     "output-exists": "Kliknite {again} i odaberite Nastavi ili Prepiši.",
