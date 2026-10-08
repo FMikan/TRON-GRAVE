@@ -12,6 +12,7 @@ Fixes from the 7 October 2026 QA & UI/UX review and the 8 October 2026 code revi
 - Pokreni asks before making an output folder that no longer exists (renamed or moved since), instead of silently starting a fresh run that pays for every photo again (CR-03).
 - A `.processed` that exists but can't be read (OneDrive, a dropped network drive) refuses the resume instead of counting as empty, which dropped every paid row and re-sent every photo (CR-04).
 - A photo is sent as it is only up to 3.75 MiB, so its base64 stays within the API's 5 MiB per image; larger PNG, WebP or quality-100 JPEG files are re-encoded instead of failing with an API error on every run (CR-05).
+- Claude Opus 5 gets the request without the written "reasoning" step, which Anthropic's docs say its classifier may decline on every photo (CR-06).
 - CLI: a run without `--resume` no longer wipes an `output.csv` that has rows (`[output-exists]`), and an input folder without photos stops before anything is written (`[no-images]`) (QA-01).
 - Pokreni asks before a run estimated at $2 or more (QA-02).
 - The status line and the summary say how to open the comma-separated CSV in a Croatian Excel (QA-03).

@@ -160,9 +160,9 @@ All six offered models accept all five **effort** levels. The GUI always sends t
 the model reason harder per image at higher token cost; drop to `low`/`medium` for cheaper, faster
 runs.
 
-For Sonnet 5.5, Opus 5.5 and the Fable models the request leaves out the written "reasoning" step
-(the model's unsaved working notes before it fills in the records), because those models decline a
-prompt that asks them to write out their reasoning; Sonnet 5 and Opus 5 keep it.
+For Sonnet 5.5, Opus 5, Opus 5.5 and the Fable models the request leaves out the written "reasoning"
+step (the model's unsaved working notes before it fills in the records), because those models decline
+a prompt that asks them to write out their reasoning; Sonnet 5 keeps it.
 
 ---
 

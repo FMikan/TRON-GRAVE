@@ -9,10 +9,11 @@ import httpx
 from extractor import image_processor as ip
 from tests.helpers import FakeClient, MidStream, answer, api_error, jpeg_bytes, message, record
 
-# Sonnet 5.5, Opus 5.5 and the Fable models decline a prompt that asks them to write out their
-# reasoning; Sonnet 5, Opus 5 and the 4.x models keep the scratchpad. Any other id gets the lean request.
-LEAN_MODELS = ("claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5", "claude-fable-5-1", "claude-future-9")
-FULL_MODELS = ("claude-sonnet-5", "claude-opus-5", "claude-sonnet-4-6", "claude-opus-4-8")
+# Sonnet 5.5, Opus 5 and 5.5 and the Fable models decline a prompt that asks them to write out their
+# reasoning; Sonnet 5 and the 4.x models keep the scratchpad. Any other id gets the lean request.
+LEAN_MODELS = ("claude-sonnet-5-5", "claude-opus-5", "claude-opus-5-5", "claude-fable-5", "claude-fable-5-1",
+               "claude-future-9")
+FULL_MODELS = ("claude-sonnet-5", "claude-sonnet-4-6", "claude-opus-4-8")
 
 
 class ProcessImageCase(unittest.TestCase):

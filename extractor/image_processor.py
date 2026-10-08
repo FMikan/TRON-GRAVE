@@ -507,10 +507,10 @@ def _writes_reasoning(model: str) -> bool:
 
     Sonnet 5.5, Opus 5.5 and the Fable models decline a prompt that asks the model to write out its
     reasoning (refusal category "reasoning_extraction"), and a fallback model does not retry that
-    decline. Sonnet 5, Opus 5 and the 4.x models predate that check and keep the scratchpad; any
-    other model gets the lean request, which every model accepts.
+    decline. Anthropic's docs say Opus 5 runs the same check. Sonnet 5 and the 4.x models predate
+    it and keep the scratchpad; any other model gets the lean request, which every model accepts.
     """
-    return model in ("claude-sonnet-5", "claude-opus-5") or "-4-" in model
+    return model == "claude-sonnet-5" or "-4-" in model
 
 
 def _request_parts(model: str) -> tuple[list, dict]:
