@@ -19,7 +19,7 @@ from dotenv import dotenv_values
 
 import ui_logic
 from extractor.csv_writer import check_writable, read_processed, resume_problem
-from extractor.file_utils import back_up_outputs, is_heic, is_supported_image
+from extractor.file_utils import back_up_outputs, backup_would_move, is_heic, is_supported_image
 from _version import __version__
 
 
@@ -709,7 +709,7 @@ class App:
             mode = self._choose_output_mode(in_dir, out_dir)
             if (mode is None
                     or (not retry and not self._cost_confirmed(in_dir, out_dir, model, effort, mode))
-                    or (mode == "fresh" and not self._backup_outputs(out_dir))
+                    or (mode == "fresh" and not self._backup_outputs(out_dir, in_dir))
                     or not self._csv_writable(out_dir)):
                 self._release_lock()
                 return
@@ -884,8 +884,16 @@ class App:
         win.protocol("WM_DELETE_WINDOW", lambda: pick(None))
         return win, choice
 
-    def _backup_outputs(self, out_dir: Path) -> bool:
+    def _backup_outputs(self, out_dir: Path, in_dir: Path) -> bool:
         """Move output.csv, byhand/ and byhand_retry/ aside before a fresh run: all of them or none."""
+        held = backup_would_move(out_dir, in_dir)
+        if held is not None:
+            messagebox.showerror(
+                "Neispravna ulazna mapa",
+                f"Ulazna mapa je unutar {held.name}/, a obrada ispočetka tu mapu premješta u kopiju "
+                "(.bak) zajedno sa slikama.\n\nOdaberite drugu izlaznu mapu.",
+            )
+            return False
         try:
             back_up_outputs(out_dir)
         except OSError as e:

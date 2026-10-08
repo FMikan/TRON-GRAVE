@@ -17,7 +17,8 @@ from extractor.csv_writer import (
     mark_processed, read_csv, read_processed, resume_problem, rewrite_rows,
 )
 from extractor.file_utils import (
-    back_up_outputs, clear_byhand, copy_to_byhand, extract_id, is_heic, is_supported_image,
+    back_up_outputs, backup_would_move, clear_byhand, copy_to_byhand, extract_id, is_heic,
+    is_supported_image,
     remove_from_byhand,
 )
 from extractor.image_processor import ImageResult, failure_row, process_image
@@ -194,6 +195,10 @@ def main() -> int:
             drop_rows_being_rerun(output_csv, images)
         else:
             if args.overwrite:
+                held = backup_would_move(output_dir, input_dir)
+                if held is not None:
+                    fatal(f"The input folder is inside {held.name}/, which --overwrite would move "
+                          "aside with the photos. Choose a different output folder.")
                 try:
                     back_up_outputs(output_dir)
                 except OSError as e:

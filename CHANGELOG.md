@@ -17,7 +17,7 @@ Fixes from the 7 October 2026 QA & UI/UX review.
 - The summary offers the photos to review and a priced retry with a stronger model (QA-08).
 - The window stays usable at 150–175 % scaling: sizes scale, labels wrap, and the minimum height keeps the buttons and four log lines (QA-09).
 - Nastavi is greyed out, with Otvori CSV offered, when every photo is already done (QA-10).
-- Prepiši also sets the old `byhand_retry/` aside (QA-11).
+- Prepiši also sets the old `byhand_retry/` aside, and refuses when the input folder is inside a folder it would move (QA-11).
 - A folder whose photos are in subfolders says so (QA-12).
 - Log search shows "3/12" or "Nema rezultata" and goes back with Shift+Enter (QA-13).
 - First launch names the next setup step (QA-14).

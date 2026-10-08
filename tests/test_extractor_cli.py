@@ -339,6 +339,20 @@ class FreshRunGuardTests(CliCase):
                           "output.20260101-000001.bak.csv"])
         self.assertEqual(len(self.rows()), 1)
 
+    def test_overwrite_refuses_to_move_an_input_folder_inside_byhand_retry(self):
+        self.add_image("p_1_x.jpg")
+        self.run_cli(message(answer(record(name=None))))           # one row, one photo in byhand/
+        self.inp = self.out / "byhand_retry" / "byhand"           # the stronger model's leftovers
+        self.inp.mkdir(parents=True)
+        self.add_image("p_2_x.jpg")
+        before = (self.out / "output.csv").read_bytes()
+        code, _, err, client = self.run_cli(message(answer(record())), args=("--overwrite",))
+        self.assertEqual((code, client.calls), (1, []))
+        self.assertIn("byhand_retry", err)
+        self.assertTrue((self.inp / "p_2_x.jpg").exists())
+        self.assertEqual((self.out / "output.csv").read_bytes(), before)
+        self.assertEqual([p.name for p in self.out.iterdir() if ".bak" in p.name], [])
+
     def test_overwrite_and_resume_cannot_be_combined(self):
         self.add_image("p_1_x.jpg")
         code, _, err, _ = self.run_cli(args=("--overwrite", "--resume"))

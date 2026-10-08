@@ -119,3 +119,16 @@ def back_up_outputs(out_dir: Path, stamp: str | None = None) -> list[Path]:
                 pass
         raise
     return [dst for _src, dst, _folder in moved]
+
+
+def backup_would_move(out_dir: Path, path: Path) -> Path | None:
+    """The folder back_up_outputs(out_dir) would move that is `path` or holds it, if any."""
+    here = Path(path).resolve()
+    for name, _pattern, folder in _BACKUPS:
+        src = out_dir / name
+        if folder and src.is_dir():
+            for p in (here, *here.parents):
+                # samefile, not ==: on a case-insensitive filesystem out/ByHand is byhand/ too
+                if p.exists() and os.path.samefile(p, src):
+                    return src
+    return None

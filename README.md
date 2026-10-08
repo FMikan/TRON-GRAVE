@@ -290,7 +290,8 @@ Options:
   --overwrite        Start fresh even though output.csv has rows: output.csv, byhand/ and
                      byhand_retry/ are first moved aside as output.<time>.bak.csv,
                      byhand.<time>.bak and byhand_retry.<time>.bak. Without it (or --resume) a
-                     run refuses an output folder whose output.csv has rows.
+                     run refuses an output folder whose output.csv has rows. Refuses (exit 1)
+                     when the input folder is inside a folder it would move.
   --verbose          Show detailed per-image progress
   --dry-run          List discovered images without making any API calls
 ```
@@ -322,8 +323,9 @@ and the closing lines report the run's total: `Total cost: $2.35`.
   images in the input folder, an output.csv with rows and neither `--resume` nor `--overwrite`,
   unwritable output folder); stderr then reads `error: [tag] …`, where the tag is `api-401`,
   `api-402`, `api-403`, `api-404`, `spend-cap`, `api-down`, `csv-locked`, `resume-refused`,
-  `input-is-byhand`, `no-images` or `output-exists` (a missing key or input folder, or an
-  unwritable output folder, prints a plain `error: …`)
+  `input-is-byhand`, `no-images` or `output-exists` (a missing key or input folder, an
+  unwritable output folder, or an input folder that `--overwrite` would move prints a plain
+  `error: …`)
 - `130` — Interrupted by user (Ctrl+C)
 
 ---

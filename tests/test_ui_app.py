@@ -468,6 +468,25 @@ class MissingKeyTests(RunCase):
         self.assertEqual(self.launched, [])
 
 
+class BackupGuardTests(RunCase):
+    def test_prepisi_refuses_to_move_an_input_folder_inside_byhand_retry(self):
+        nested = self.out / "byhand_retry" / "byhand"          # the stronger model's leftovers
+        nested.mkdir(parents=True)
+        (nested / "p_1_x.jpg").write_bytes(jpeg_bytes())
+        init_csv(self.out / "output.csv")
+        append_rows(self.out / "output.csv", [["1", "Ana", "Horvat", "1900", "1980", "", "p_1_x.jpg"]])
+        self.app.input_var.set(str(nested))
+        with mock.patch.object(grave_ui.App, "_ask_existing_output", return_value="fresh"):
+            self.app._on_start()
+        self.assertEqual(self.launched, [])
+        (title, body), _ = self.dialogs["showerror"].call_args
+        self.assertEqual(title, "Neispravna ulazna mapa")
+        self.assertIn("byhand_retry/", body)
+        self.assertTrue((nested / "p_1_x.jpg").exists())
+        self.assertEqual([p.name for p in self.out.iterdir() if ".bak" in p.name], [])
+        self.assertFalse(self.lock().exists())
+
+
 class OutcomeStatusTests(RunCase):
     def test_a_runs_outcome_stays_in_the_status_line_while_the_setup_stays_ready(self):
         self._patch(grave_ui.filedialog, "askdirectory", mock.Mock(return_value=str(self.inp)))
