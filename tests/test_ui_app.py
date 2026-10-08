@@ -598,6 +598,25 @@ class CostCheckTests(RunCase):
             self.app._on_start()
         self.assertIn("Obraditi 1 sliku?", self.choices.call_args[0][1])
 
+    def test_a_processed_list_that_turns_unreadable_after_nastavi_is_priced_as_every_photo(self):
+        # The list dropped out of reach between Nastavi and the cost check: no crash, and the
+        # question covers every photo rather than none (the extractor then refuses the resume).
+        self.priced_at(2.0)
+        self.out.mkdir(parents=True)
+        (self.out / ".processed").write_text("p_1_x.jpg\n", encoding="utf-8")
+        real_read_text = Path.read_text
+
+        def offline(path, *args, **kwargs):
+            if path.name == ".processed":
+                raise OSError(22, "The cloud file provider is not running")
+            return real_read_text(path, *args, **kwargs)
+
+        self.answer("cancel")
+        with mock.patch.object(Path, "read_text", offline):
+            ok = self.app._cost_confirmed(self.inp, self.out, "claude-sonnet-5", "high", "resume")
+        self.assertFalse(ok)
+        self.assertIn("Obraditi 2 slike?", self.choices.call_args[0][1])
+
     def test_a_retry_is_asked_once(self):
         self.app._settings["stats"] = {"claude-opus-5-5|high": {"cost": 9.0, "secs": 1.0, "n": 1}}
         (self.out / "byhand").mkdir(parents=True)
