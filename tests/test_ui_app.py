@@ -1206,6 +1206,20 @@ class RetryTests(RunCase):
         ask.assert_called_once()
         self.assertIn("--resume", self.launched[-1])
 
+    def test_a_second_retry_can_start_over_and_sets_its_own_byhand_aside(self):
+        # It reads out/byhand/ and starts over in out/byhand_retry/: nothing the backup moves
+        # holds its input, so the input-folder guard must let it through.
+        (self.retry_out / "byhand").mkdir(parents=True)
+        (self.retry_out / "byhand" / "p_1_x.jpg").write_bytes(jpeg_bytes())
+        init_csv(self.retry_out / "output.csv")
+        append_rows(self.retry_out / "output.csv", [["1", "Ivan", "Horvat", 1920, 1999, "", "p_1_x.jpg"]])
+        with mock.patch.object(grave_ui.App, "_ask_existing_output", return_value="fresh"):
+            self.app._on_retry_byhand()
+        self.assertTrue(self.launched)
+        self.assertNotIn("--resume", self.launched[-1])
+        self.assertEqual(sorted(p.name.split(".")[0] for p in self.retry_out.glob("*.bak*")), ["byhand", "output"])
+        self.assertTrue((self.out / "byhand" / "p_1_x.jpg").exists())
+
     def test_a_stopped_retry_points_back_to_the_retry_button(self):
         self.app._on_retry_byhand()
         self.app._stop_requested = True
