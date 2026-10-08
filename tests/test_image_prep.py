@@ -1,4 +1,6 @@
+import base64
 import io
+import random
 import shutil
 import tempfile
 import unittest
@@ -23,6 +25,15 @@ class PrepareImageTests(unittest.TestCase):
     def test_small_upright_jpeg_is_sent_untouched(self):
         raw = jpeg_bytes(400, 300)
         self.assertEqual(prepare_image(raw), (raw, "image/jpeg"))
+
+    def test_a_photo_sent_as_is_stays_under_the_apis_5_mib_base64_limit(self):
+        # A 1.4 MP PNG export needs no shrinking or rotating, but noise compresses worst: about
+        # 4.2 MB, which as base64 is over the API's 5 MiB per image, so it must be re-encoded.
+        buf = io.BytesIO()
+        Image.frombytes("RGB", (1400, 1000), random.Random(0).randbytes(1400 * 1000 * 3)).save(buf, "PNG")
+        self.assertGreater(len(buf.getvalue()), 3_932_160)
+        data, _mime = prepare_image(buf.getvalue())
+        self.assertLessEqual(len(base64.b64encode(data)), 5 * 1024 * 1024)
 
     def test_exif_rotation_is_baked_into_the_pixels(self):
         data, mime = prepare_image(jpeg_bytes(400, 300, orientation=6))

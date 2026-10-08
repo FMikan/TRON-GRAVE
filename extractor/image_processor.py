@@ -26,8 +26,9 @@ Image.MAX_IMAGE_PIXELS = 250_000_000
 # over 8000 px is rejected outright. 3.6 MP keeps the ceil-rounded token count under 4,784.
 MAX_LONG_EDGE = 2576
 MAX_PIXELS = 3_600_000
-# The direct Claude API accepts 10 MB per image, base64-encoded (7.5 MB of raw bytes).
-MAX_SEND_BYTES = 7_500_000
+# The API caps each image at 5 MiB of base64 (the SDK's agent toolset uses the same limit),
+# so at most 3.75 MiB of raw bytes go out as they are; anything larger is re-encoded.
+MAX_SEND_BYTES = (5 * 1024 * 1024 // 4) * 3
 _JPEG_QUALITY = 90
 _MEDIA_TYPES = {"JPEG": "image/jpeg", "MPO": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
 _SENDABLE_MODES = {"RGB", "RGBA", "L", "LA", "P"}
