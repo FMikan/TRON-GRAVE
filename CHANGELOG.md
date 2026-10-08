@@ -9,6 +9,7 @@ Fixes from the 7 October 2026 QA & UI/UX review and the 8 October 2026 code revi
 ### Fixed
 - A photo whose answer is already paid for waits for a locked output.csv until it is closed, instead of being thrown away after 30 s and paid for again on resume (CR-01).
 - When Nastavi is greyed out, the dialog's default button is Odustani: Enter no longer starts a fresh run that sends and bills every photo again (CR-02).
+- Pokreni asks before making an output folder that no longer exists (renamed or moved since), instead of silently starting a fresh run that pays for every photo again (CR-03).
 - CLI: a run without `--resume` no longer wipes an `output.csv` that has rows (`[output-exists]`), and an input folder without photos stops before anything is written (`[no-images]`) (QA-01).
 - Pokreni asks before a run estimated at $2 or more (QA-02).
 - The status line and the summary say how to open the comma-separated CSV in a Croatian Excel (QA-03).

@@ -693,6 +693,15 @@ class App:
                 "Ulazna mapa ne smije biti byhand/ mapa ove izlazne mape.\nOdaberite drugu izlaznu mapu.",
             )
             return
+        # A remembered folder renamed or moved since (or a USB stick under another letter) would be
+        # made anew and empty, and every photo it holds results for paid again.
+        if not os.path.isdir(out_dir) and self._ask_choice(
+            "Izlazna mapa ne postoji",
+            f"{out_dir}\n\nne postoji. Ako ste je premjestili ili preimenovali, odaberite je ponovno "
+            "(Izlazna mapa → Odaberi…): u novoj, praznoj mapi sve se slike ponovno šalju i plaćaju.",
+            [("create", "Stvori novu mapu"), ("cancel", "Odustani")], default="cancel",
+        ) != "create":
+            return
         self._start_in(in_dir, out_dir, self._model_id(), self._effort_id())
 
     def _start_in(self, in_dir: Path, out_dir: Path, model: str, effort: str,

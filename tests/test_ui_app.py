@@ -438,6 +438,25 @@ class LockAndDryRunTests(RunCase):
         self.assertTrue(self.lock().exists())
 
 
+class MissingOutputFolderTests(RunCase):
+    def test_a_missing_output_folder_is_asked_about_before_it_is_made(self):
+        # the remembered folder was renamed or moved: a new empty one would pay for every photo again
+        self.answer("cancel")
+        self.app._on_start()
+        self.assertIsNotNone(self.choices.call_args, "Pokreni asked nothing")
+        (title, _body, choices), kwargs = self.choices.call_args
+        self.assertEqual(title, "Izlazna mapa ne postoji")
+        self.assertEqual((choices[-1], kwargs), (("cancel", "Odustani"), {"default": "cancel"}))
+        self.assertFalse(self.out.exists())
+        self.assertEqual(self.launched, [])
+
+    def test_an_existing_output_folder_is_not_asked_about(self):
+        self.out.mkdir(parents=True)
+        self.app._on_start()
+        self.assertNotIn("Izlazna mapa ne postoji", [c[0][0] for c in self.choices.call_args_list])
+        self.assertTrue(self.launched)
+
+
 class LaunchFailureTests(RunCase):
     def test_a_launch_that_fails_leaves_the_buttons_as_the_disk_has_them(self):
         (self.out / "byhand").mkdir(parents=True)
@@ -563,6 +582,7 @@ class CostCheckTests(RunCase):
         self.assertFalse(self.lock().exists())
 
     def test_a_cheap_run_starts_without_asking(self):
+        self.out.mkdir(parents=True)
         self.app._on_start()
         self.choices.assert_not_called()
         self.assertTrue(self.launched)

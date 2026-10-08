@@ -346,6 +346,8 @@ overwriting it, so you don't pay to reprocess photos the model already answered.
 no answer (for example the API call failed or the file could not be read) are left out of
 `.processed` deliberately, so a resume retries them rather than writing them off. **Nastavi** is
 greyed out, with the reason, when a resume would be refused (see `--resume` in the CLI reference).
+If the output folder no longer exists (renamed or moved since the last session), **Pokreni** asks
+before making a new, empty one, since every photo would then be sent and paid for again.
 
 Closing the window during a run asks first, then stops the run the same way as **Zaustavi**; the
 window closes once the run has stopped. Rows already written are kept, and a later
