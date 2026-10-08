@@ -171,6 +171,7 @@ class App:
         self._settings: dict = {}
         self._log_file = None
         self._lock_note: str | None = None
+        self._outcome_shown = False         # the status line shows how the last run ended
         self._billed_n = 0
         self._billed_secs = 0.0
         self._photo_started: float | None = None
@@ -1010,7 +1011,8 @@ class App:
         self.ent_key.configure(show="" if self.show_key_var.get() else "•")
 
     def _refresh_readiness(self) -> str | None:
-        """While no run is in progress, the status line names the next setup step."""
+        """While no run is in progress, the status line names the next setup step; once the
+        setup is complete, a finished run's outcome stays there until the next run."""
         if self.proc is not None:
             return None
         if not self.input_var.get():
@@ -1021,6 +1023,9 @@ class App:
             text = "Upišite API ključ i kliknite Spremi ključ."
         else:
             text = "Spremno."
+        if text == "Spremno." and self._outcome_shown:
+            return text                     # the outcome stays until the next run
+        self._outcome_shown = False
         self.status_var.set(text)
         return text
 
@@ -1344,6 +1349,7 @@ class App:
         tag = fatal.group(1) if fatal else None
         # A dry run saved nothing to resume, and Nastavi cannot cure these errors.
         resumable = not is_dry and tag not in ("resume-refused", "input-is-byhand", "no-images", "output-exists")
+        self._outcome_shown = True
         # Carries its own blank line, so a dialog without it does not end on one.
         resume_hint = (f"\n\nZa nastavak kliknite {again} i odaberite Nastavi — već obrađene slike "
                        "neće se ponovno slati (ni plaćati).") if resumable else ""
@@ -1619,6 +1625,7 @@ class App:
         self._billed_n = 0
         self._billed_secs = 0.0
         self._photo_started = None
+        self._outcome_shown = False
         self.progress.configure(mode="determinate", value=0, maximum=100)
         self.log.configure(state="normal")
         self.log.delete("1.0", "end")

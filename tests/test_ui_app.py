@@ -468,6 +468,29 @@ class MissingKeyTests(RunCase):
         self.assertEqual(self.launched, [])
 
 
+class OutcomeStatusTests(RunCase):
+    def test_a_runs_outcome_stays_in_the_status_line_while_the_setup_stays_ready(self):
+        self._patch(grave_ui.filedialog, "askdirectory", mock.Mock(return_value=str(self.inp)))
+        for rc in (0, 1):
+            with self.subTest(rc=rc):
+                self.app._on_start()
+                self.app._on_proc_exit(rc)
+                outcome = self.app.status_var.get()
+                self.app.api_key_var.set(f"sk-test-{rc}")      # typing in the key field
+                self.app._pick_input()
+                self.assertEqual(self.app.status_var.get(), outcome)
+
+    def test_an_incomplete_setup_still_replaces_the_outcome_with_the_next_step(self):
+        self.app._on_start()
+        self.app._on_proc_exit(0)
+        with mock.patch.dict(os.environ):
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            self.app.api_key_var.set("")
+            self.assertEqual(self.app.status_var.get(), "Upišite API ključ i kliknite Spremi ključ.")
+            self.app.api_key_var.set("sk-test")
+            self.assertEqual(self.app.status_var.get(), "Spremno.")
+
+
 
 class CostCheckTests(RunCase):
     def priced_at(self, per_photo):
