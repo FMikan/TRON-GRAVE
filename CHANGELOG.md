@@ -4,6 +4,8 @@ All notable changes to TRON-GRAVE. Versions follow the git tags.
 
 ## Unreleased
 
+## 3.7.0 — 2026-10-08
+
 Fixes from the 7 October 2026 QA & UI/UX review and the 8 October 2026 code review.
 
 ### Fixed
