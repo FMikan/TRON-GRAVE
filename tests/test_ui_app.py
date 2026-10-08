@@ -910,6 +910,15 @@ class ExistingOutputTests(RunCase):
         win.btn_fresh.invoke()
         self.assertEqual(choice["value"], "fresh")
 
+    def test_a_blocked_dialog_defaults_to_odustani_not_prepisi(self):
+        # Prepiši re-sends every photo already paid for: Enter must not pay twice.
+        for problem, reason in ui_logic.RESUME_BLOCKERS.items():
+            with self.subTest(problem):
+                win, _choice = self.app._build_existing_output_dialog(Path("x/output.csv"), 3, 1, 2, reason)
+                win.withdraw()
+                self.addCleanup(lambda w=win: w.winfo_exists() and w.destroy())
+                self.assertIs(win.default_button, win.btn_cancel)
+
     def open_dialog(self, csv_path=Path("x/output.csv")):
         """The Nastavi / Prepiši / Odustani dialog with nothing blocking it, never mapped."""
         win, choice = self.app._build_existing_output_dialog(csv_path, 3, 1, 2, None)

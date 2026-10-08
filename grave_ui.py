@@ -877,7 +877,8 @@ class App:
         buttons = [b for b in (win.btn_resume, win.btn_fresh, win.btn_open, win.btn_cancel) if b is not None]
         for col, button in enumerate(buttons):
             button.grid(row=3, column=col, padx=(0 if col == 0 else 6, 0), pady=(14, 0))
-        win.default_button = win.btn_cancel if all_done else win.btn_fresh if blocker else win.btn_resume
+        # Blocked, Prepiši is the only way on, but it re-sends and re-pays every photo: Enter must not.
+        win.default_button = win.btn_cancel if blocker else win.btn_resume
         win.default_button.focus_set()
         win.bind("<Return>", lambda _e: self._press_focused(win, buttons))
         win.bind("<Escape>", lambda _e: pick(None))
