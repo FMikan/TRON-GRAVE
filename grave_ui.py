@@ -758,6 +758,11 @@ class App:
         try:
             processed = read_processed(out_dir)
         except OSError:
+            if not csv_path.exists():
+                # Which photos were paid for is unknown: starting over could pay for them again.
+                messagebox.showerror("Ne mogu pročitati .processed",
+                                     f"{ui_logic.RESUME_BLOCKERS['unreadable']}.")
+                return None
             processed = set()           # resume_problem() below greys out Nastavi with the reason
         if not csv_path.exists():
             if processed and self._ask_choice(

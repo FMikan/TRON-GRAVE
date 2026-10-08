@@ -1001,6 +1001,23 @@ class ExistingOutputTests(RunCase):
         self.assertEqual(self.launched, [])
         self.assertFalse(self.lock().exists())
 
+    def test_a_missing_csv_with_an_unreadable_processed_list_starts_nothing(self):
+        # The list can't say which photos were paid for: starting over could pay for them again.
+        self.out.mkdir(parents=True)
+        (self.out / ".processed").write_text("p_1_x.jpg\np_2_x.jpg\n", encoding="utf-8")
+        real_read_text = Path.read_text
+
+        def offline(path, *args, **kwargs):
+            if path.name == ".processed":
+                raise OSError(22, "The cloud file provider is not running")
+            return real_read_text(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "read_text", offline):
+            self.app._on_start()
+        self.assertEqual(self.launched, [])
+        self.assertIn(ui_logic.RESUME_BLOCKERS["unreadable"], self.dialogs["showerror"].call_args[0][1])
+        self.assertFalse(self.lock().exists())
+
     def test_starting_over_after_a_missing_csv_is_a_fresh_run_that_sets_byhand_aside(self):
         self.out.mkdir(parents=True)
         (self.out / ".processed").write_text("p_1_x.jpg\n", encoding="utf-8")
