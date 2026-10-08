@@ -98,7 +98,7 @@ def write_rows(output_csv: Path, rows: list[list], paid: bool) -> None:
             if attempt % CSV_LOCK_RETRIES == 0:
                 wait = ("waiting until it is closed: this photo is already paid for" if paid
                         else f"retrying for {CSV_LOCK_RETRIES * CSV_LOCK_POLL_SECS} s")
-                print(f"warning: {output_csv} is locked (open in Excel?) — close it; {wait}",
+                print(f"warning: {output_csv} is locked (open in Excel?) — close it ({e}); {wait}",
                       file=sys.stderr, flush=True)
             attempt += 1
             time.sleep(CSV_LOCK_POLL_SECS)

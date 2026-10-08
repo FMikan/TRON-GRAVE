@@ -267,10 +267,10 @@ class DescribeLineTests(unittest.TestCase):
              ("Upozorenje: preskočeno HEIC/HEIF datoteka: 2 — pretvorite ih u JPG.", "warn")),
             ("warning: /x/output.csv is locked (open in Excel?) — close it; retrying for 30 s",
              ("Upozorenje: output.csv je zaključan (otvoren u Excelu?) — zatvorite ga; pokušavam još 30 s.", "warn")),
-            ("warning: /x/output.csv is locked (open in Excel?) — close it; waiting until it is closed: "
-             "this photo is already paid for",
+            ("warning: /x/output.csv is locked (open in Excel?) — close it ([Errno 13] Permission denied); "
+             "waiting until it is closed: this photo is already paid for",
              ("Upozorenje: output.csv je zaključan (otvoren u Excelu?) — zatvorite ga; obrada čeka da "
-              "spremi već plaćenu sliku.", "warn")),
+              "spremi rezultat već plaćene slike.", "warn")),
             ("warning: could not copy a.jpg to byhand/: disk full",
              ("Upozorenje: ne mogu kopirati a.jpg u byhand/.", "warn")),
             ("warning: could not remove a.jpg from byhand/: busy",

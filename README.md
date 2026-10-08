@@ -304,10 +304,11 @@ Warnings go to stderr and do not change the exit code, e.g.
 `warning: skipping N .heic/.heif file(s); convert them to JPG first` (iPhone photos the API cannot
 take) and `warning: no price table entry for <model>` (a `--model` with no known price: the costs
 shown assume a default of $3 input / $15 output per million tokens, so treat them as a guess).
-A locked output.csv (open in Excel) prints `warning: … is locked (open in Excel?) …`. A photo whose
-answer is already paid for waits until the file is closed, repeating the warning every 30 s, so the
-answer is never lost; otherwise the run stops with `[csv-locked]` (at once if the lock is there
-before a photo is sent, after 30 s if it appears while an unbilled row is written).
+A locked output.csv (open in Excel) prints `warning: … is locked (open in Excel?) — close it (<the
+error>); …`. A photo whose answer is already paid for waits until the file can be written again,
+repeating the warning every 30 s, so the answer is kept unless the run is stopped while it waits;
+otherwise the run stops with `[csv-locked]` (at once if the lock is there before a photo is sent,
+after 30 s if it appears while an unbilled row is written).
 
 Verbose output prints two lines per image, one when it starts and one with its verdict (`OK`,
 `PARTIAL` or `FAILED`). The verdict line of every photo the model answered also shows the real

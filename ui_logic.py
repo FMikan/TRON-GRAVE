@@ -220,7 +220,7 @@ _WARNINGS_HR = (
      "Upozorenje: preskočeno HEIC/HEIF datoteka: {0} — pretvorite ih u JPG."),
     (re.compile(r"^warning: .*output\.csv is locked.*already paid for$"),
      "Upozorenje: output.csv je zaključan (otvoren u Excelu?) — zatvorite ga; obrada čeka da spremi "
-     "već plaćenu sliku."),
+     "rezultat već plaćene slike."),
     (re.compile(r"^warning: .*output\.csv is locked"),
      "Upozorenje: output.csv je zaključan (otvoren u Excelu?) — zatvorite ga; pokušavam još 30 s."),
     (re.compile(r"^warning: could not copy (.+) to byhand/"), "Upozorenje: ne mogu kopirati {0} u byhand/."),

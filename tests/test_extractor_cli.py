@@ -163,6 +163,23 @@ class RobustnessTests(CliCase):
         self.assertEqual(err.count("already paid for"), 3)           # at 0, 30 and 60 s
         self.assertEqual(time.sleep.call_count, 40)
 
+    def test_a_paid_answer_that_cannot_be_written_says_why(self):
+        # Not every write failure is Excel's lock: a full disk must not read as "close it" forever.
+        self.add_image("p_1_x.jpg")
+        real_append = grave_extractor.append_rows
+        calls = []
+
+        def disk_full_for_a_while(path, rows):
+            calls.append(1)
+            if len(calls) <= 3:
+                raise OSError(28, "No space left on device")
+            real_append(path, rows)
+
+        with mock.patch.object(grave_extractor, "append_rows", side_effect=disk_full_for_a_while):
+            code, _, err, _ = self.run_cli(message(answer(record())))
+        self.assertEqual(code, 0)
+        self.assertIn("No space left on device", err)
+
     def test_a_failed_byhand_copy_is_only_a_warning(self):
         self.add_image("p_1_x.jpg")
         with mock.patch.object(grave_extractor, "copy_to_byhand", side_effect=OSError("disk full")):
