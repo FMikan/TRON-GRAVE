@@ -74,10 +74,14 @@ def mark_processed(output_dir: Path, image: Path) -> None:
 
 
 def read_processed(output_dir: Path) -> set[str]:
-    """Image filenames a previous run finished, for --resume."""
+    """Image filenames a previous run finished, for --resume (none when there is no list yet).
+
+    Raises OSError when the list exists but can't be read (a OneDrive file left in the cloud, a
+    network drive that dropped): taken as empty, the resume would pay for every photo again.
+    """
     try:
         text = (output_dir / PROCESSED_FILE).read_text(encoding='utf-8', errors='surrogateescape')
-    except OSError:
+    except FileNotFoundError:
         return set()
     return {line.strip() for line in text.splitlines() if line.strip()}
 
@@ -88,15 +92,15 @@ def resume_problem(output_dir: Path) -> str | None:
     'old-format'   output.csv has other columns (written by an older version)
     'no-processed' output.csv has rows but there is no .processed file
     'missing-csv'  .processed lists images but output.csv is gone or has no rows
-    'unreadable'   output.csv could not be parsed
+    'unreadable'   output.csv could not be parsed, or .processed could not be read
     'not-utf8'     output.csv is no longer UTF-8 (re-saved as ANSI by Excel or an editor)
     """
     csv_path = output_dir / 'output.csv'
     try:
         header, rows = read_csv(csv_path)
+        processed = read_processed(output_dir)
     except (OSError, csv.Error):
         return 'unreadable'
-    processed = read_processed(output_dir)
     if not header:
         return 'missing-csv' if processed else None
     if header != CSV_COLUMNS:

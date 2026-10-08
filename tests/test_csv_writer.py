@@ -3,6 +3,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from extractor.csv_writer import (
     CSV_COLUMNS, append_rows, check_writable, csv_text, init_csv, init_processed,
@@ -85,6 +86,25 @@ class ResumeProblemTests(CsvCase):
         self.csv.write_bytes((",".join(CSV_COLUMNS) + "\r\n1,Mišo,Čupić,1920,1999,,p_1_x.jpg\r\n").encode("cp1250"))
         (self.tmp / ".processed").write_text("p_1_x.jpg\n", encoding="utf-8")
         self.assertEqual(resume_problem(self.tmp), "not-utf8")
+
+    def test_an_unreadable_processed_list_is_refused_not_taken_for_empty(self):
+        # a OneDrive file left in the cloud, a dropped network drive: read as empty, the resume
+        # would drop every row and pay for every photo again
+        init_csv(self.csv)
+        append_rows(self.csv, [["1", "A", "", "", "", "", "a.jpg"]])
+        (self.tmp / ".processed").write_text("a.jpg\n", encoding="utf-8")
+        real_read_text = Path.read_text
+
+        def offline(path, *args, **kwargs):
+            if path.name == ".processed":
+                raise OSError(22, "The cloud file provider is not running")
+            return real_read_text(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "read_text", offline):
+            self.assertEqual(resume_problem(self.tmp), "unreadable")
+            with self.assertRaises(OSError):
+                read_processed(self.tmp)
+        self.assertEqual(read_processed(self.tmp / "nowhere"), set())     # no list yet: nothing done
 
     def test_a_utf8_bom_file_is_still_resumable(self):
         init_csv(self.csv)

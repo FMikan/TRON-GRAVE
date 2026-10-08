@@ -112,7 +112,8 @@ _RESUME_REFUSALS = {
                     "(and re-pay for) every image. Start a fresh run instead.",
     "missing-csv": ".processed lists finished images but output.csv is missing or empty. Restore "
                    "output.csv, or delete .processed to start over.",
-    "unreadable": "output.csv can't be read, so this run can't be resumed.",
+    "unreadable": "output.csv or .processed can't be read (on a network drive or OneDrive, check "
+                  "the connection), so this run can't be resumed now.",
     "not-utf8": "output.csv is no longer UTF-8 (re-saved from Excel or an editor as ANSI), so this "
                 "run can't be resumed: appending would mix encodings and a rewrite would damage "
                 "the old rows. Re-save it as UTF-8 and resume, or back it up and start a fresh run.",

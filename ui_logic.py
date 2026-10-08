@@ -387,7 +387,8 @@ RESUME_BLOCKERS = {
                   "ili je ponovno spremljen iz Excela",
     "no-processed": "nedostaje popis obrađenih slika (.processed), pa bi se sve slike ponovno poslale",
     "missing-csv": "output.csv je prazan ili nedostaje",
-    "unreadable": "output.csv se ne može pročitati",
+    "unreadable": "output.csv ili .processed se ne može pročitati — ako je mapa na mrežnom disku "
+                  "ili OneDriveu, provjerite vezu i pokušajte ponovno",
     "not-utf8": "output.csv više nije u UTF-8 zapisu (ponovno je spremljen iz Excela ili uređivača "
                 "kao ANSI) — spremite ga kao UTF-8 ili krenite ispočetka",
 }

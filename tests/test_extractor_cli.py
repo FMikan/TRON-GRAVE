@@ -265,6 +265,24 @@ class ResumeTests(CliCase):
                 self.assertEqual((code, client.calls), (1, []))
                 self.assertIn("[resume-refused]", err)
 
+    def test_resume_refuses_an_unreadable_processed_list_and_keeps_every_row(self):
+        self.add_image("p_1_x.jpg")
+        self.add_image("p_2_x.jpg")
+        self.run_cli(message(answer(record())), message(answer(record(name="Ana"))))
+        before = (self.out / "output.csv").read_bytes()
+        real_read_text = Path.read_text
+
+        def offline(path, *args, **kwargs):
+            if path.name == ".processed":
+                raise OSError(22, "The cloud file provider is not running")
+            return real_read_text(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "read_text", offline):
+            code, _, err, client = self.run_cli(message(answer(record())), args=("--resume",))
+        self.assertEqual((code, client.calls), (1, []))
+        self.assertIn("[resume-refused]", err)
+        self.assertEqual((self.out / "output.csv").read_bytes(), before)
+
     def test_a_fresh_run_clears_old_byhand_copies(self):
         self.add_image("p_1_x.jpg")
         self.run_cli(message(answer(record(name=None))))

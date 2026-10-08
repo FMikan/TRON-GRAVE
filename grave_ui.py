@@ -734,7 +734,10 @@ class App:
         except OSError:
             return True                 # the extractor reports an unreadable folder itself
         if mode == "resume":
-            names -= read_processed(out_dir)
+            try:
+                names -= read_processed(out_dir)
+            except OSError:
+                pass                    # the extractor refuses this resume itself
         count = len(names)
         cost, secs, measured = ui_logic.estimate(self._settings.get("stats"), model, effort, count)
         if count == 0 or cost < ui_logic.COST_CONFIRM_USD:
@@ -752,7 +755,10 @@ class App:
     def _choose_output_mode(self, in_dir: Path, out_dir: Path) -> str | None:
         """'fresh', 'resume', or None when the user cancels, for a run into out_dir."""
         csv_path = out_dir / "output.csv"
-        processed = read_processed(out_dir)
+        try:
+            processed = read_processed(out_dir)
+        except OSError:
+            processed = set()           # resume_problem() below greys out Nastavi with the reason
         if not csv_path.exists():
             if processed and self._ask_choice(
                 "Nedostaje output.csv",

@@ -284,8 +284,9 @@ Options:
                      re-send finished photos: an output.csv with other columns (from an older
                      version, or re-saved from Excel), output.csv rows without .processed, or
                      .processed without output.csv (or with an output.csv emptied to its
-                     header); an unreadable output.csv, or one that is no longer UTF-8
-                     (re-saved as ANSI by Excel or an editor), is refused too.
+                     header); an output.csv or .processed that can't be read (a network
+                     drive or OneDrive that dropped out), or an output.csv that is no longer
+                     UTF-8 (re-saved as ANSI by Excel or an editor), is refused too.
                      With --dry-run, lists only the photos that would run.
   --overwrite        Start fresh even though output.csv has rows: output.csv, byhand/ and
                      byhand_retry/ are first moved aside as output.<time>.bak.csv,

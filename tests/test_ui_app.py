@@ -899,6 +899,21 @@ class ExistingOutputTests(RunCase):
         self.assertEqual(self.launched, [])
         self.assertFalse(self.lock().exists())
 
+    def test_an_unreadable_processed_list_blocks_nastavi(self):
+        self.make_output(processed=("p_1_x.jpg", "p_2_x.jpg"))
+        real_read_text = Path.read_text
+
+        def offline(path, *args, **kwargs):
+            if path.name == ".processed":
+                raise OSError(22, "The cloud file provider is not running")
+            return real_read_text(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "read_text", offline), \
+                mock.patch.object(grave_ui.App, "_ask_existing_output", return_value=None) as ask:
+            self.app._on_start()
+        self.assertEqual(ask.call_args[0][4], ui_logic.RESUME_BLOCKERS["unreadable"])
+        self.assertEqual(self.launched, [])
+
     def test_a_header_only_csv_with_processed_photos_blocks_nastavi(self):
         self.make_output()
         init_csv(self.out / "output.csv")          # the rows were deleted by hand
