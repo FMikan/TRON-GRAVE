@@ -912,7 +912,17 @@ class ExistingOutputTests(RunCase):
                 mock.patch.object(grave_ui.App, "_ask_existing_output", return_value=None) as ask:
             self.app._on_start()
         self.assertEqual(ask.call_args[0][4], ui_logic.RESUME_BLOCKERS["unreadable"])
+        self.assertIsNone(ask.call_args[0][2])          # how many are done is unknown, not 0
         self.assertEqual(self.launched, [])
+
+    def test_an_unknown_done_count_is_shown_as_a_question_mark_not_zero(self):
+        # "Već obrađeno: 0/2" next to Prepiši would read as "nothing paid for yet"
+        win, _choice = self.app._build_existing_output_dialog(
+            Path("x/output.csv"), 3, None, 2, ui_logic.RESUME_BLOCKERS["unreadable"])
+        win.withdraw()
+        self.addCleanup(lambda: win.winfo_exists() and win.destroy())
+        texts = [str(w.cget("text")) for w in all_widgets(win) if isinstance(w, ttk.Label)]
+        self.assertTrue(any("Već obrađeno: ?/2 slika" in t for t in texts), texts)
 
     def test_a_header_only_csv_with_processed_photos_blocks_nastavi(self):
         self.make_output()

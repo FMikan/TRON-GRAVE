@@ -763,7 +763,7 @@ class App:
                 messagebox.showerror("Ne mogu pročitati .processed",
                                      f"{ui_logic.RESUME_BLOCKERS['unreadable']}.")
                 return None
-            processed = set()           # resume_problem() below greys out Nastavi with the reason
+            processed = None            # unknown; resume_problem() below greys out Nastavi with the reason
         if not csv_path.exists():
             if processed and self._ask_choice(
                 "Nedostaje output.csv",
@@ -777,7 +777,7 @@ class App:
             names = {f.name for f in in_dir.iterdir() if f.is_file() and is_supported_image(f)}
         except OSError:
             names = set()
-        done, total = len(names & processed), len(names)
+        done, total = (len(names & processed) if processed is not None else None), len(names)
         problem = resume_problem(out_dir)
         blocker = ui_logic.RESUME_BLOCKERS.get(problem) if problem else None
         if blocker is None and total and done == total:
@@ -788,7 +788,7 @@ class App:
             return None
         return answer
 
-    def _ask_existing_output(self, csv_path: Path, rows: int, done: int, total: int,
+    def _ask_existing_output(self, csv_path: Path, rows: int, done: int | None, total: int,
                              blocker: str | None) -> str | None:
         win, choice = self._build_existing_output_dialog(csv_path, rows, done, total, blocker)
         self._present(win)
@@ -861,7 +861,7 @@ class App:
         self.root.wait_window(win)
         return choice["value"]
 
-    def _build_existing_output_dialog(self, csv_path: Path, rows: int, done: int, total: int,
+    def _build_existing_output_dialog(self, csv_path: Path, rows: int, done: int | None, total: int,
                                       blocker: str | None):
         win = self._dialog("output.csv već postoji")
         choice = {"value": None}
@@ -876,7 +876,7 @@ class App:
         ttk.Label(
             frm, justify="left", wraplength=520,
             text=f"{csv_path} već postoji (redaka: {rows}).\n"
-                 f"Već obrađeno: {done}/{total} slika iz ulazne mape.",
+                 f"Već obrađeno: {'?' if done is None else done}/{total} slika iz ulazne mape.",
         ).grid(row=0, column=0, columnspan=4, sticky="w")
         ttk.Label(
             frm, justify="left", foreground=THEME["MUTED"], wraplength=520,
