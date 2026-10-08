@@ -452,6 +452,22 @@ class LaunchFailureTests(RunCase):
             self.app.btn_open, self.app.btn_retry_byhand)], ["normal"] * 2)
 
 
+class MissingKeyTests(RunCase):
+    def test_both_missing_key_dialogs_name_the_save_button_as_it_reads(self):
+        self.app.api_key_var.set("")
+        (self.out / "byhand").mkdir(parents=True)
+        (self.out / "byhand" / "p_1_x.jpg").write_bytes(jpeg_bytes())
+        with mock.patch.dict(os.environ):
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            self.app._on_start()
+            self.app._on_retry_byhand()
+        calls = self.dialogs["showerror"].call_args_list
+        self.assertEqual([c[0][0] for c in calls], ["Nedostaje API ključ"] * 2)
+        for call in calls:
+            self.assertIn(f"kliknite {self.app.btn_save_key.cget('text')}", call[0][1])
+        self.assertEqual(self.launched, [])
+
+
 
 class CostCheckTests(RunCase):
     def priced_at(self, per_photo):

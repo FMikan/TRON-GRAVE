@@ -680,7 +680,7 @@ class App:
         if not api_key:
             messagebox.showerror(
                 "Nedostaje API ključ",
-                "Upišite svoj Anthropic API ključ u polje „API ključ” iznad pa kliknite Spremi.\n\n"
+                "Upišite svoj Anthropic API ključ u polje „API ključ” iznad pa kliknite Spremi ključ.\n\n"
                 "Ključ možete dobiti na: console.anthropic.com",
             )
             return
@@ -1519,7 +1519,7 @@ class App:
         if not api_key:
             messagebox.showerror(
                 "Nedostaje API ključ",
-                "Upišite svoj Anthropic API ključ u polje „API ključ” iznad pa kliknite Spremi.",
+                "Upišite svoj Anthropic API ključ u polje „API ključ” iznad pa kliknite Spremi ključ.",
             )
             return
         self._api_key = api_key
