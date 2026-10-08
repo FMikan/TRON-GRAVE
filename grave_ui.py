@@ -1067,6 +1067,7 @@ class App:
             self._set_running(False)
             self._refresh_output_buttons()      # _set_running(False) leaves Open and Retry off
             self.status_var.set("Pokretanje nije uspjelo.")
+            self._outcome_shown = True
             self._release_lock()
             self._close_run_log()
             return
@@ -1667,6 +1668,7 @@ class App:
         """Open a CSV, and say how to import it into Excel set to Croatian (it expects ;)."""
         if self._open_path(path):
             self.status_var.set(EXCEL_HINT)
+            self._outcome_shown = False
 
     def _notify_done(self):
         if not sys.platform.startswith("linux"):
@@ -1778,6 +1780,7 @@ class App:
         if self._save_settings(include_key=True):
             self.status_var.set("API ključ spremljen." if self.api_key_var.get().strip()
                                 else "API ključ uklonjen iz postavki.")
+            self._outcome_shown = False
         else:
             messagebox.showerror("Ne mogu spremiti postavke", f"Ne mogu pisati u {SETTINGS_PATH}.")
 

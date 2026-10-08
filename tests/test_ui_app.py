@@ -509,6 +509,28 @@ class OutcomeStatusTests(RunCase):
             self.app.api_key_var.set("sk-test")
             self.assertEqual(self.app.status_var.get(), "Spremno.")
 
+    def test_a_launch_that_failed_keeps_saying_so(self):
+        with mock.patch.object(grave_ui.App, "_launch_subprocess", REAL_LAUNCH_SUBPROCESS), \
+                mock.patch.object(grave_ui.subprocess, "Popen", side_effect=OSError("no interpreter")):
+            self.app._on_start()
+        self.app.api_key_var.set("sk-test-2")
+        self.assertEqual(self.app.status_var.get(), "Pokretanje nije uspjelo.")
+
+    def test_saving_the_key_after_a_run_hands_the_status_back_to_the_setup_steps(self):
+        self.app._on_start()
+        self.app._on_proc_exit(0)
+        self.app._on_save_key()
+        self.app.api_key_var.set("sk-other")                  # a different key, not saved yet
+        self.assertEqual(self.app.status_var.get(), "Spremno.")
+
+    def test_the_excel_hint_after_a_run_gives_way_to_the_setup_steps_too(self):
+        self.app._on_start()
+        self.app._on_proc_exit(0)
+        with mock.patch.object(grave_ui.App, "_open_path", return_value=True):
+            self.app._open_csv(self.out / "output.csv")
+        self.app.api_key_var.set("sk-other")
+        self.assertEqual(self.app.status_var.get(), "Spremno.")
+
 
 
 class CostCheckTests(RunCase):
