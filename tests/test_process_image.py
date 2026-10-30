@@ -1,3 +1,4 @@
+import json
 import shutil
 import tempfile
 import unittest
@@ -10,7 +11,7 @@ from extractor import image_processor as ip
 from tests.helpers import FakeClient, MidStream, answer, api_error, jpeg_bytes, message, record
 
 # Sonnet 5.5, Opus 5 and 5.5 and the Fable models decline a prompt that asks them to write out their
-# reasoning; Sonnet 5 and the 4.x models keep the scratchpad. Any other id gets the lean request.
+# reasoning; Sonnet 5 and the 4.x models keep the scratchpads. Any other id gets the lean request.
 LEAN_MODELS = ("claude-sonnet-5-5", "claude-opus-5", "claude-opus-5-5", "claude-fable-5", "claude-fable-5-1",
                "claude-future-9")
 FULL_MODELS = ("claude-sonnet-5", "claude-sonnet-4-6", "claude-opus-4-8")
@@ -67,16 +68,22 @@ class RequestShapeTests(ProcessImageCase):
                 kwargs = self.request_for(model)
                 schema = kwargs["output_config"]["format"]["schema"]
                 system = kwargs["system"][0]
-                self.assertNotIn("reasoning", schema["properties"])
-                self.assertNotIn("reasoning", schema["required"])
-                self.assertIn("raw_text", schema["required"])   # the transcription stays
-                self.assertNotIn('2. "reasoning":', system["text"])
-                self.assertNotIn("BOTH scratchpad fields", system["text"])
-                for kept in ('1. "raw_text":', "Your task:", "Worked examples:"):
+                for scratchpad in ("raw_text", "reasoning"):
+                    self.assertNotIn(scratchpad, schema["properties"])
+                    self.assertNotIn(scratchpad, schema["required"])
+                for kept in ("Your task:", "Worked examples:"):
                     self.assertIn(kept, system["text"])
                 self.assertEqual(system["cache_control"], {"type": "ephemeral"})
                 self.assertIs(schema, ip.RESULT_SCHEMA_LEAN)
                 self.assertEqual(system["text"], ip.SYSTEM_PROMPT_LEAN)
+
+    def test_the_lean_request_asks_for_no_written_working(self):
+        # The classifier declines ("reasoning_extraction") a request that has the model write its
+        # working into the answer, so the lean one carries no scratchpad, no "this before that"
+        # step, and none of the words that lead there.
+        text = (ip.SYSTEM_PROMPT_LEAN + json.dumps(ip.RESULT_SCHEMA_LEAN, ensure_ascii=False)).lower()
+        for word in ("scratchpad", "raw_text", "reasoning", "transcri", "in words", "exact order", "working"):
+            self.assertNotIn(word, text)
 
     def test_the_other_models_keep_the_written_reasoning(self):
         for model in FULL_MODELS:
@@ -84,23 +91,24 @@ class RequestShapeTests(ProcessImageCase):
                 kwargs = self.request_for(model)
                 schema = kwargs["output_config"]["format"]["schema"]
                 system = kwargs["system"][0]
-                self.assertIn("reasoning", schema["properties"])
-                self.assertIn("reasoning", schema["required"])
+                for scratchpad in ("raw_text", "reasoning"):
+                    self.assertIn(scratchpad, schema["properties"])
+                    self.assertIn(scratchpad, schema["required"])
                 self.assertIn('2. "reasoning":', system["text"])
                 self.assertEqual(system["cache_control"], {"type": "ephemeral"})
                 self.assertIs(schema, ip.RESULT_SCHEMA)
                 self.assertEqual(system["text"], ip.SYSTEM_PROMPT)
 
-    def test_the_lean_prompt_is_the_full_prompt_without_step_2(self):
+    def test_the_lean_prompt_is_the_full_prompt_without_the_scratchpad_steps(self):
         full, lean = ip.SYSTEM_PROMPT.splitlines(), ip.SYSTEM_PROMPT_LEAN.splitlines()
-        start = next(i for i, line in enumerate(full) if line.startswith('2. "reasoning":'))
-        end = next(i for i, line in enumerate(full) if line.startswith("Then fill the structured fields below"))
+        start = next(i for i, line in enumerate(full) if line.startswith("Work in this exact order"))
+        end = full.index("Your task:")
         kept = full[:start] + full[end:]
-        # Every line outside step 2 survives in order; only the two lines that pointed at it changed.
+        # Every line outside the scratchpad steps survives in order; only rule 6's line that leaned
+        # on the transcription changed.
         self.assertEqual(len(lean), len(kept))
         self.assertEqual([new for old, new in zip(kept, lean) if new != old], [
-            "Work in this exact order, filling the scratchpad field before any structured field:",
-            "Then fill the structured fields below from your transcription.",
+            "   the inscription lets you conclude it with HIGH confidence. The clearest",
         ])
 
     def test_a_model_always_gets_the_identical_system_blocks(self):

@@ -208,14 +208,15 @@ Worked examples:
   as "Horvat" before writing the output field; do not leave any field in Cyrillic characters."""
 
 # The prompt for the models that decline to write out their reasoning (see _writes_reasoning): the
-# same text without step 2, and with the two lines that pointed at it reworded. index() raises at
-# import if a later edit of the prompt loses either end of step 2; the tests pin the wording changes.
-_STEP_2_START = SYSTEM_PROMPT.index('2. "reasoning":')
-_STEP_2_END = SYSTEM_PROMPT.index("Then fill the structured fields below")
+# same text without the scratchpad steps, and with rule 6 no longer leaning on the transcription.
+# index() raises at import if a later edit of the prompt loses either end of those steps; the tests
+# pin the wording change.
+_SCRATCHPAD_START = SYSTEM_PROMPT.index("Work in this exact order")
+_SCRATCHPAD_END = SYSTEM_PROMPT.index("Your task:")
 SYSTEM_PROMPT_LEAN = (
-    (SYSTEM_PROMPT[:_STEP_2_START] + SYSTEM_PROMPT[_STEP_2_END:])
-    .replace("filling BOTH scratchpad fields", "filling the scratchpad field")
-    .replace("from your reasoning.", "from your transcription.")
+    (SYSTEM_PROMPT[:_SCRATCHPAD_START] + SYSTEM_PROMPT[_SCRATCHPAD_END:])
+    .replace("the transcription lets you conclude it with HIGH confidence — reasoning, not guessing.",
+             "the inscription lets you conclude it with HIGH confidence.")
 )
 
 
@@ -230,7 +231,8 @@ RESULT_SCHEMA = {
     "type": "object",
     "properties": {
         # Internal scratchpad only: forces the model to read the whole stone before
-        # classifying, which improves the structured fields. Not written to the CSV.
+        # classifying, which improves the structured fields. Not written to the CSV. Like
+        # `reasoning`, sent only to the models that accept it (see _writes_reasoning).
         "raw_text": {
             "type": "string",
             "description": "Verbatim transcription of everything legible on every marker belonging "
@@ -289,15 +291,16 @@ RESULT_SCHEMA = {
     "additionalProperties": False,
 }
 
-# The same answer without the "reasoning" scratchpad, for the models that decline it.
+# The same answer without the two scratchpads, for the models that decline them.
 RESULT_SCHEMA_LEAN = copy.deepcopy(RESULT_SCHEMA)
-del RESULT_SCHEMA_LEAN["properties"]["reasoning"]
-RESULT_SCHEMA_LEAN["required"].remove("reasoning")
+for _scratchpad in ("raw_text", "reasoning"):
+    del RESULT_SCHEMA_LEAN["properties"][_scratchpad]
+    RESULT_SCHEMA_LEAN["required"].remove(_scratchpad)
 
 # Cache the system prompt (stable across every image in a run). Below the model's minimum
 # cacheable prefix this silently has no effect and costs nothing extra. Minimums: 1024 tok
 # on Sonnet 5, 512 on the other offered models -- this prompt runs ~4k tokens. The full prompt,
-# with its written-reasoning step, goes only to the models that accept it (see _writes_reasoning);
+# with its scratchpad steps, goes only to the models that accept it (see _writes_reasoning);
 # the rest get the lean one. Module-level constants, so every call of a model sends the same bytes.
 _SYSTEM_BLOCKS = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
 _SYSTEM_BLOCKS_LEAN = [{"type": "text", "text": SYSTEM_PROMPT_LEAN, "cache_control": {"type": "ephemeral"}}]
@@ -503,12 +506,12 @@ def _max_tokens(effort: str | None) -> int:
 
 
 def _writes_reasoning(model: str) -> bool:
-    """Whether the request may ask for the written "reasoning" scratchpad.
+    """Whether the request may ask for the written scratchpads ("raw_text" and "reasoning").
 
     Sonnet 5.5, Opus 5.5 and the Fable models decline a prompt that asks the model to write out its
     reasoning (refusal category "reasoning_extraction"), and a fallback model does not retry that
     decline. Anthropic's docs say Opus 5 runs the same check. Sonnet 5 and the 4.x models predate
-    it and keep the scratchpad; any other model gets the lean request, which every model accepts.
+    it and keep both scratchpads; any other model gets the lean request, which every model accepts.
     """
     return model == "claude-sonnet-5" or "-4-" in model
 
