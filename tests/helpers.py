@@ -15,7 +15,7 @@ def jpeg_bytes(w=400, h=300, orientation=None, quality=90) -> bytes:
     img.paste((0, 0, 0), (0, 0, max(1, w // 2), max(1, h // 4)))
     buf = io.BytesIO()
     kwargs = {}
-    if orientation:
+    if orientation is not None:
         exif = Image.Exif()
         exif[0x0112] = orientation
         kwargs["exif"] = exif

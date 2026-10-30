@@ -4,6 +4,9 @@ All notable changes to TRON-GRAVE. Versions follow the git tags.
 
 ## Unreleased
 
+### Fixed
+- A photo whose EXIF orientation is 0 (an invalid "upright" some field apps write) goes out untouched instead of being re-encoded at JPEG quality 90 for a rotation that changes nothing.
+
 ## 3.7.1 — 2026-10-30
 
 Fixes for photos declined by Sonnet 5.5 and the other models that run the reasoning check, and the move to the anthropic 2.3.0 SDK.

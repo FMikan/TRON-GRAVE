@@ -33,6 +33,9 @@ _JPEG_QUALITY = 90
 _MEDIA_TYPES = {"JPEG": "image/jpeg", "MPO": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
 _SENDABLE_MODES = {"RGB", "RGBA", "L", "LA", "P"}
 _EXIF_ORIENTATION = 0x0112
+# The orientations that turn or flip the picture (what ImageOps.exif_transpose applies). 0, which
+# some field apps write for "upright", and other stray values change nothing.
+_TURNING_ORIENTATIONS = frozenset(range(2, 9))
 
 
 SYSTEM_PROMPT = """You are a genealogical data extraction assistant. You will be shown a photograph of a tombstone.
@@ -449,7 +452,7 @@ def prepare_image(raw: bytes) -> tuple[bytes, str]:
     except Exception:  # a broken EXIF block says nothing about the pixels, which decoded fine
         orientation = 1
 
-    if (scale == 1.0 and orientation in (None, 1) and img.mode in _SENDABLE_MODES
+    if (scale == 1.0 and orientation not in _TURNING_ORIENTATIONS and img.mode in _SENDABLE_MODES
             and fmt in _MEDIA_TYPES and len(raw) <= MAX_SEND_BYTES):
         return raw, _MEDIA_TYPES[fmt]
 

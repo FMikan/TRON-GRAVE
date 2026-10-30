@@ -41,6 +41,14 @@ class PrepareImageTests(unittest.TestCase):
         self.assertEqual((mime, img.size), ("image/jpeg", (300, 400)))
         self.assertIsNone(img.getexif().get(0x0112))
 
+    def test_an_invalid_exif_orientation_counts_as_upright(self):
+        # Only 2-8 turn or flip the picture. 0, which field apps write for "upright", and other
+        # stray values do not, so such a photo goes out untouched instead of being re-encoded.
+        for orientation in (0, 9):
+            with self.subTest(orientation=orientation):
+                raw = jpeg_bytes(400, 300, orientation=orientation)
+                self.assertEqual(prepare_image(raw), (raw, "image/jpeg"))
+
     def test_50_mp_phone_photo_is_shrunk_to_what_the_model_uses(self):
         data, _ = prepare_image(jpeg_bytes(8160, 6120))   # over the API's 8000 px limit
         w, h = decode(data).size
