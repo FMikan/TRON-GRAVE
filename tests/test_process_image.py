@@ -3,6 +3,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import httpx
@@ -137,6 +138,17 @@ class AnswerTests(ProcessImageCase):
         result, _ = self.run_image(message(text="", stop_reason="refusal"))
         self.assertEqual((result.status, result.rows[0][5]), ("total_failure", "odbijeno"))
         self.assertGreater(result.cost, 0)
+
+    def test_a_refusal_names_the_classifier_that_declined(self):
+        details = SimpleNamespace(type="refusal", category="reasoning_extraction", explanation=None)
+        result, _ = self.run_image(message(text="", stop_reason="refusal", stop_details=details))
+        self.assertEqual(result.reason, "Model declined to answer (refusal): reasoning_extraction")
+        self.assertEqual(result.rows[0][5], "odbijeno")   # the CSV note stays as it was
+        # stop_details can be null on a refusal, and so can its category.
+        for details in (None, SimpleNamespace(type="refusal", category=None, explanation=None)):
+            with self.subTest(details=details):
+                result, _ = self.run_image(message(text="", stop_reason="refusal", stop_details=details))
+                self.assertEqual(result.reason, "Model declined to answer (refusal)")
 
     def test_cut_off_answer_is_a_billed_failure(self):
         result, _ = self.run_image(message(text='{"raw_text": "IVAN', stop_reason="max_tokens"))

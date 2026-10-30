@@ -238,6 +238,7 @@ class DescribeLineTests(unittest.TestCase):
                 ("Model reported a problem: natpis oštećen", "model javlja: natpis oštećen"),
                 ("Nearby markers may belong to this grave and were left out", "provjeri: možda više oznaka"),
                 ("Model declined to answer (refusal)", "odbijeno"),
+                ("Model declined to answer (refusal): reasoning_extraction", "odbijeno: reasoning_extraction"),
                 ("Response hit the max_tokens ceiling before the answer finished", "odgovor prekinut"),
                 ("Model returned no valid JSON answer (stop_reason: end_turn)", "neispravan odgovor"),
                 ("All fields illegible", "sve nečitko"),

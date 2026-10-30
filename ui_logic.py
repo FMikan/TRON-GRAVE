@@ -207,6 +207,7 @@ _REASONS_HR = {
     "output.csv is locked": "output.csv je zaključan",
 }
 _REASON_PREFIXES_HR = (
+    ("Model declined to answer (refusal): ", "odbijeno: {}"),
     ("Model reported a problem: ", "model javlja: {}"),
     ("Response hit the max_tokens ceiling", "odgovor prekinut"),
     ("Model returned no valid JSON answer", "neispravan odgovor"),

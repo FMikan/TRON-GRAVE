@@ -81,7 +81,7 @@ to look when reviewing results. Typical notes:
 | the model's own sentence, e.g. `natpis djelomično oštećen` | The model reported a problem with the photo | Yes — **PARTIAL** (**FAILED** if it read nothing) |
 | `sve nečitko`, `nema podataka` | Nothing could be extracted | Yes — **FAILED** |
 | `odgovor prekinut` | The model's reply hit the token ceiling before it finished; nothing from it is used (the call is billed, the photo counts as processed and goes to `byhand/`) | Yes — **FAILED** |
-| `odbijeno` | The model declined to answer | Yes — **FAILED** |
+| `odbijeno` | The model declined to answer; the log names the refusal category Anthropic gave, e.g. `odbijeno: reasoning_extraction` | Yes — **FAILED** |
 | `neispravan odgovor` | The model's answer was not valid JSON | Yes — **FAILED** |
 | `neočekivana greška` | An unexpected error on this photo; the run carried on with the next one | Yes — **FAILED** |
 | `ne mogu otvoriti` | The file could not be read or decoded (truncated, corrupt, a HEIC renamed to .jpg) | Yes — **FAILED** |

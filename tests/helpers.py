@@ -60,12 +60,13 @@ def answer(*records, error=None, ambiguous=False) -> dict:
             "ambiguous_multiple_markers": ambiguous}
 
 
-def message(answer_=None, stop_reason="end_turn", text=None, usage_=None):
+def message(answer_=None, stop_reason="end_turn", text=None, usage_=None, stop_details=None):
     """A fake Message: an (empty) thinking block, then the answer as one JSON text block."""
     if text is None:
         text = json.dumps(answer_)
     content = [SimpleNamespace(type="thinking", thinking=""), SimpleNamespace(type="text", text=text)]
-    return SimpleNamespace(content=content, stop_reason=stop_reason, usage=usage_ or usage())
+    return SimpleNamespace(content=content, stop_reason=stop_reason, stop_details=stop_details,
+                           usage=usage_ or usage())
 
 
 def api_error(status, body=None, headers=None):

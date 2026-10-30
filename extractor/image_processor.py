@@ -646,7 +646,11 @@ def _classify(response, cost: float, record_id: str, extra_tags, file_name: str)
         )
 
     if response.stop_reason == "refusal":
-        return failure("odbijeno", "Model declined to answer (refusal)")
+        # The category names the safety classifier that declined (e.g. "reasoning_extraction").
+        # stop_details can be null on a refusal, and so can its category.
+        category = response.stop_details.category if response.stop_details else None
+        reason = "Model declined to answer (refusal)"
+        return failure("odbijeno", f"{reason}: {category}" if category else reason)
     # A turn cut off at max_tokens leaves half-written JSON, which would parse into silently
     # missing people if it parsed at all. Bail before looking at it.
     if response.stop_reason == "max_tokens":
