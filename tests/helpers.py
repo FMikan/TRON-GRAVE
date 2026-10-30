@@ -5,7 +5,7 @@ import json
 from types import SimpleNamespace
 
 import anthropic
-import httpx
+import httpx2
 from PIL import Image
 
 
@@ -71,8 +71,8 @@ def message(answer_=None, stop_reason="end_turn", text=None, usage_=None, stop_d
 
 def api_error(status, body=None, headers=None):
     """The exact anthropic exception the SDK raises for an HTTP `status` response."""
-    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-    response = httpx.Response(status, request=request, headers=headers or {})
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx2.Response(status, request=request, headers=headers or {})
     if body is None:
         body = {"type": "error", "error": {"type": "api_error", "message": "boom"}}
     return anthropic.Anthropic(api_key="test")._make_status_error(

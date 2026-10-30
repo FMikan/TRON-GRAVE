@@ -8,6 +8,10 @@ All notable changes to TRON-GRAVE. Versions follow the git tags.
 - Sonnet 5.5, Opus 5.5, Opus 5 and the Fable models get a request with no scratchpad at all: no `raw_text` transcription written before the answer and no "work in this exact order" step, which their `reasoning_extraction` classifier can decline on some photos (`odbijeno`). Sonnet 5 and the 4.x models keep both scratchpads.
 - A declined photo's log line names the refusal category Anthropic gave, e.g. `odbijeno: reasoning_extraction`; the CSV note stays `odbijeno`.
 
+### Changed
+- The `anthropic` SDK is 2.3.0 (was 0.x): requests use API version 2026-10-21, and its HTTP layer is `httpx2`. Run `pip install -r requirements.txt` after updating a source checkout.
+- CLI: `--model claude-sonnet-4-6` no longer sends `temperature=0`, which API version 2026-10-21 rejects on every model; Sonnet 4.x now samples at the default temperature.
+
 ## 3.7.0 — 2026-10-08
 
 Fixes from the 7 October 2026 QA & UI/UX review and the 8 October 2026 code review.

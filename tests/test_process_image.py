@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-import httpx
+import httpx2
 
 from extractor import image_processor as ip
 from tests.helpers import FakeClient, MidStream, answer, api_error, jpeg_bytes, message, record
@@ -126,6 +126,14 @@ class RequestShapeTests(ProcessImageCase):
     def test_effort_is_left_out_when_not_given(self):
         _, client = self.run_image(message(answer(record())), effort=None)
         self.assertNotIn("effort", client.calls[0]["output_config"])
+
+    def test_no_request_sends_sampling_parameters(self):
+        # API version 2026-10-21 rejects temperature, top_p and top_k on every model.
+        for model in LEAN_MODELS + FULL_MODELS:
+            with self.subTest(model=model):
+                kwargs = self.request_for(model)
+                for name in ("temperature", "top_p", "top_k"):
+                    self.assertNotIn(name, kwargs)
 
 
 class AnswerTests(ProcessImageCase):
@@ -250,7 +258,7 @@ class ApiErrorTests(ProcessImageCase):
         self.assertEqual((result.status, len(client.calls)), ("full_success", 2))
 
     def test_a_connection_dropped_mid_stream_is_retried(self):
-        result, _ = self.run_image(MidStream(httpx.RemoteProtocolError("peer closed")), message(answer(record())))
+        result, _ = self.run_image(MidStream(httpx2.RemoteProtocolError("peer closed")), message(answer(record())))
         self.assertEqual(result.status, "full_success")
 
     def test_a_bad_request_is_an_unbilled_api_failure(self):

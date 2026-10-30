@@ -166,7 +166,8 @@ All pip packages are listed in `requirements.txt`:
 
 | Package | Purpose |
 |---|---|
-| `anthropic` | Anthropic Claude Vision API client |
+| `anthropic` | Anthropic Claude Vision API client (2.x: API version 2026-10-21) |
+| `httpx2` | The HTTP library under `anthropic`; imported to recognise a connection dropped mid-answer |
 | `python-dotenv` | Loads `ANTHROPIC_API_KEY` from the `.env` file |
 | `Pillow` | Prepares every photo for the API: decodes it, applies its EXIF rotation, shrinks it to the 2576 px the model uses, and sends it in its real format |
 

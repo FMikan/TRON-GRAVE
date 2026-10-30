@@ -1,5 +1,7 @@
-# output_config (the --effort flag) landed in anthropic 0.77.0; anything older
-# raises TypeError on messages.create().
-anthropic>=0.77.0,<1.0.0
+# anthropic 2.x sends API version 2026-10-21 (which rejects temperature) and runs on httpx2;
+# 2.3.0 is the release this code was tested with.
+anthropic>=2.3.0,<3.0.0
+# Imported directly to catch a stream cut off mid-answer; it also comes with anthropic.
+httpx2>=2.0
 python-dotenv>=1.0.0
 Pillow>=10.0.0

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import anthropic
-import httpx
+import httpx2
 from PIL import Image, ImageOps
 
 from .pricing import compute_cost
@@ -524,9 +524,6 @@ def _request_parts(model: str) -> tuple[list, dict]:
 
 
 def _call_api(client, model: str, mime: str, b64: str, effort: str | None = None):
-    # temperature is only accepted on the Sonnet 4.x family. Sonnet 5, Opus 4.7/4.8,
-    # Opus 5 and Fable 5 reject it with 400 "temperature is deprecated for this model".
-    params: dict = {"temperature": 0} if "sonnet-4" in model else {}
     system, schema = _request_parts(model)
     # Structured output, not a forced tool call: Sonnet 5.5, Opus 5.5 and Fable 5.1 reject
     # tool_choice "tool" with a 400. The answer arrives as one JSON text block.
@@ -540,7 +537,6 @@ def _call_api(client, model: str, mime: str, b64: str, effort: str | None = None
         max_tokens=_max_tokens(effort),
         system=system,
         output_config=output_config,
-        **params,
         messages=[{
             "role": "user",
             "content": [
@@ -611,8 +607,8 @@ def process_image(client, model: str, path: Path, record_id: str,
                 )
             last_error = e
         # Dropped connections and timeouts, including a stream cut off mid-read, which
-        # surfaces as a raw httpx error. (The SDK has already retried with backoff.)
-        except (anthropic.APIConnectionError, httpx.TransportError) as e:
+        # surfaces as a raw httpx2 error. (The SDK has already retried with backoff.)
+        except (anthropic.APIConnectionError, httpx2.TransportError) as e:
             last_error = e
 
         if attempt < 3:
