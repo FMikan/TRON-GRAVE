@@ -1,17 +1,25 @@
 import base64
 import io
+import math
 import random
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from PIL import Image, ImageStat
+from PIL import Image, ImageFilter, ImageStat, JpegImagePlugin
 
+from extractor import image_processor
 from extractor.image_processor import (
-    MAX_LONG_EDGE, MAX_PIXELS, ImageUnreadable, prepare_image, process_image,
+    MAX_LONG_EDGE, MAX_VISUAL_TOKENS, ImageUnreadable, prepare_image, process_image,
 )
 from tests.helpers import decode, jpeg_bytes, png16_bytes, webp_bytes
+
+
+def _tokens(size) -> int:
+    """Visual tokens the model counts for an image: one per started 28x28 px patch."""
+    return math.ceil(size[0] / 28) * math.ceil(size[1] / 28)
 
 
 def _with_bad_exif(fmt, size=(400, 300), **save_kwargs) -> bytes:
@@ -49,12 +57,49 @@ class PrepareImageTests(unittest.TestCase):
                 raw = jpeg_bytes(400, 300, orientation=orientation)
                 self.assertEqual(prepare_image(raw), (raw, "image/jpeg"))
 
+    def test_a_re_encode_that_fits_at_full_quality_gets_it(self):
+        # Quality 100 (every quantizer 1) and no chroma subsampling: nothing is thrown away
+        # that the 5 MiB limit does not force.
+        img = decode(prepare_image(jpeg_bytes(400, 300, orientation=6))[0])
+        self.assertEqual(JpegImagePlugin.get_sampling(img), 0)
+        self.assertTrue(all(q == 1 for table in img.quantization.values() for q in table))
+
+    def test_a_re_encode_takes_the_highest_jpeg_quality_that_fits(self):
+        img = Image.frombytes("RGB", (600, 400), random.Random(0).randbytes(600 * 400 * 3))
+        img = img.filter(ImageFilter.GaussianBlur(1))
+        png, q93 = io.BytesIO(), io.BytesIO()
+        img.save(png, "PNG")
+        img.save(q93, "JPEG", quality=93, subsampling=0, optimize=True)
+        # With the limit at exactly the size of the quality-93 JPEG, no higher quality fits.
+        with mock.patch.object(image_processor, "MAX_SEND_BYTES", len(q93.getvalue())):
+            self.assertEqual(prepare_image(png.getvalue()), (q93.getvalue(), "image/jpeg"))
+
+    def test_a_photo_always_fits_the_limit_even_when_no_jpeg_quality_does(self):
+        # Noise compresses worst: at this limit it fits only once it is shrunk.
+        buf = io.BytesIO()
+        Image.frombytes("RGB", (800, 600), random.Random(0).randbytes(800 * 600 * 3)).save(buf, "PNG")
+        with mock.patch.object(image_processor, "MAX_SEND_BYTES", 30_000):
+            data, mime = prepare_image(buf.getvalue())
+        self.assertEqual(mime, "image/jpeg")
+        self.assertLessEqual(len(data), 30_000)
+        w, h = decode(data).size
+        self.assertLess(w, 800)
+        self.assertAlmostEqual(w / h, 800 / 600, places=1)
+
+    def test_a_4k_photo_is_shrunk_to_exactly_what_the_model_reads(self):
+        # Anthropic's own example: 3840x2160 becomes 2576x1449, all 4,784 visual tokens.
+        data, _ = prepare_image(jpeg_bytes(3840, 2160))
+        self.assertEqual(decode(data).size, (2576, 1449))
+
     def test_50_mp_phone_photo_is_shrunk_to_what_the_model_uses(self):
         data, _ = prepare_image(jpeg_bytes(8160, 6120))   # over the API's 8000 px limit
-        w, h = decode(data).size
-        self.assertLessEqual(max(w, h), MAX_LONG_EDGE)
-        self.assertLessEqual(w * h, MAX_PIXELS * 1.01)
-        self.assertAlmostEqual(w / h, 8160 / 6120, places=2)
+        size = decode(data).size
+        self.assertEqual(size, (2212, 1659))              # the largest 4:3 size the model reads
+        self.assertLessEqual(_tokens(size), MAX_VISUAL_TOKENS)
+
+    def test_a_turned_photo_is_shrunk_to_the_models_size_once_turned(self):
+        data, _ = prepare_image(jpeg_bytes(4000, 3000, orientation=6))
+        self.assertEqual(decode(data).size, (1659, 2212))
 
     def test_panorama_is_capped_by_the_long_edge(self):
         data, _ = prepare_image(jpeg_bytes(12000, 2600))
@@ -80,9 +125,8 @@ class PrepareImageTests(unittest.TestCase):
 
     def test_malformed_exif_does_not_stop_a_photo_from_being_shrunk(self):
         data, mime = prepare_image(_with_bad_exif("JPEG", (3000, 2000), dpi=(300, 300)))
-        w, h = decode(data).size
         self.assertEqual(mime, "image/jpeg")
-        self.assertLessEqual(w * h, MAX_PIXELS * 1.01)
+        self.assertLessEqual(_tokens(decode(data).size), MAX_VISUAL_TOKENS)
 
     def test_media_type_comes_from_the_content(self):
         raw = webp_bytes()                                 # e.g. a WebP saved as .jpg

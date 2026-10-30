@@ -6,6 +6,11 @@ All notable changes to TRON-GRAVE. Versions follow the git tags.
 
 ### Fixed
 - A photo whose EXIF orientation is 0 (an invalid "upright" some field apps write) goes out untouched instead of being re-encoded at JPEG quality 90 for a rotation that changes nothing.
+- A re-encoded photo is checked against the API's 5 MiB per image too: it always fits, shrinking a little in the rare case that not even JPEG quality 85 does (noise-like images).
+
+### Changed
+- A photo that has to be re-encoded (turned, shrunk, or over 3.75 MiB) becomes the highest-quality JPEG that fits the 5 MiB: quality 100 when it fits, and no colour subsampling, instead of quality 90.
+- Large photos are shrunk to exactly the size the model reads (Anthropic's rule: 2576 px and 4,784 visual tokens) instead of to 3.6 MP, keeping up to 4 % more pixels.
 
 ## 3.7.1 — 2026-10-30
 

@@ -21,21 +21,24 @@ from .pricing import compute_cost
 # guard (~179 MP) would refuse them. JPEGs that large are decoded shrunk via draft().
 Image.MAX_IMAGE_PIXELS = 250_000_000
 
-# What the vision models actually use (long edge 2576 px, 4,784 visual tokens): anything
-# larger is downscaled server-side, so sending more only costs upload time, and anything
-# over 8000 px is rejected outright. 3.6 MP keeps the ceil-rounded token count under 4,784.
+# What the vision models actually read (Claude 4.7 and later: long edge 2576 px, at most 4,784
+# visual tokens of 28x28 px): anything larger is downscaled server-side, so sending more only
+# costs upload time, and anything over 8000 px is rejected outright.
 MAX_LONG_EDGE = 2576
-MAX_PIXELS = 3_600_000
+MAX_VISUAL_TOKENS = 4784
 # The API caps each image at 5 MiB of base64 (the SDK's agent toolset uses the same limit),
-# so at most 3.75 MiB of raw bytes go out as they are; anything larger is re-encoded.
+# so at most 3.75 MiB of raw bytes may go out, as they are or re-encoded.
 MAX_SEND_BYTES = (5 * 1024 * 1024 // 4) * 3
-_JPEG_QUALITY = 90
+# A re-encode takes the highest JPEG quality that fits MAX_SEND_BYTES, but never below this:
+# an image that does not fit even then is shrunk instead (only noise-like images get there).
+_MIN_JPEG_QUALITY = 85
 _MEDIA_TYPES = {"JPEG": "image/jpeg", "MPO": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
 _SENDABLE_MODES = {"RGB", "RGBA", "L", "LA", "P"}
 _EXIF_ORIENTATION = 0x0112
 # The orientations that turn or flip the picture (what ImageOps.exif_transpose applies). 0, which
 # some field apps write for "upright", and other stray values change nothing.
 _TURNING_ORIENTATIONS = frozenset(range(2, 9))
+_QUARTER_TURNS = frozenset({5, 6, 7, 8})
 
 
 SYSTEM_PROMPT = """You are a genealogical data extraction assistant. You will be shown a photograph of a tombstone.
@@ -433,16 +436,17 @@ def prepare_image(raw: bytes) -> tuple[bytes, str]:
 
     Decodes the whole image first, so a truncated file fails here instead of at the API.
     The media type comes from the content, not the extension. EXIF rotation is baked into
-    the pixels (the API ignores image metadata) and the image is shrunk to what the model
-    uses. When none of that changes anything, the original bytes go out untouched.
+    the pixels (the API ignores image metadata) and the image is shrunk to exactly what the
+    model reads. When none of that changes anything, the original bytes go out untouched;
+    otherwise the result is the highest-quality JPEG that fits MAX_SEND_BYTES.
     """
     try:
         img = Image.open(io.BytesIO(raw))
         fmt = img.format
         width, height = img.size
-        scale = min(1.0, MAX_LONG_EDGE / max(width, height), math.sqrt(MAX_PIXELS / (width * height)))
-        if fmt in ("JPEG", "MPO") and scale < 0.5:
-            img.draft("RGB", (math.ceil(width * scale), math.ceil(height * scale)))
+        target = _model_size(width, height)
+        if fmt in ("JPEG", "MPO") and target[0] < width / 2:
+            img.draft("RGB", target)
         img.load()
     except Exception as e:  # Pillow raises many different types for bad input
         raise ImageUnreadable(str(e) or type(e).__name__) from e
@@ -452,23 +456,84 @@ def prepare_image(raw: bytes) -> tuple[bytes, str]:
     except Exception:  # a broken EXIF block says nothing about the pixels, which decoded fine
         orientation = 1
 
-    if (scale == 1.0 and orientation not in _TURNING_ORIENTATIONS and img.mode in _SENDABLE_MODES
-            and fmt in _MEDIA_TYPES and len(raw) <= MAX_SEND_BYTES):
+    if (target == (width, height) and orientation not in _TURNING_ORIENTATIONS
+            and img.mode in _SENDABLE_MODES and fmt in _MEDIA_TYPES and len(raw) <= MAX_SEND_BYTES):
         return raw, _MEDIA_TYPES[fmt]
 
     try:
         img = _to_rgb(ImageOps.exif_transpose(img))
+        if orientation in _QUARTER_TURNS:
+            target = target[::-1]
         # draft() may already have shrunk the image by a power of two; finish the job.
-        factor = scale * max(width, height) / max(img.size)
-        if factor < 1.0:
-            img = img.resize(
-                (max(1, round(img.width * factor)), max(1, round(img.height * factor))), Image.LANCZOS
-            )
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=_JPEG_QUALITY, optimize=True)
+        if img.size != target:
+            img = img.resize(target, Image.LANCZOS)
+        return _jpeg_within_limit(img), "image/jpeg"
     except Exception as e:
         raise ImageUnreadable(str(e) or type(e).__name__) from e
-    return buf.getvalue(), "image/jpeg"
+
+
+def _model_size(width: int, height: int) -> tuple[int, int]:
+    """The largest aspect-preserving size the model reads without downscaling.
+
+    Anthropic's reference rule (docs: vision-coordinates): neither side, padded to whole 28 px
+    patches, longer than MAX_LONG_EDGE, and at most MAX_VISUAL_TOKENS patches. A size that
+    already fits comes back unchanged.
+    """
+    def fits(w: int, h: int) -> bool:
+        return (math.ceil(w / 28) * 28 <= MAX_LONG_EDGE and math.ceil(h / 28) * 28 <= MAX_LONG_EDGE
+                and math.ceil(w / 28) * math.ceil(h / 28) <= MAX_VISUAL_TOKENS)
+
+    if fits(width, height):
+        return width, height
+    if height > width:
+        h, w = _model_size(height, width)
+        return w, h
+    aspect = width / height
+    lo, hi = 1, width                   # lo always fits, hi never does
+    while lo + 1 < hi:
+        mid = (lo + hi) // 2
+        if fits(mid, max(round(mid / aspect), 1)):
+            lo = mid
+        else:
+            hi = mid
+    return lo, max(round(lo / aspect), 1)
+
+
+def _jpeg_within_limit(img: Image.Image) -> bytes:
+    """img as the highest-quality JPEG that fits MAX_SEND_BYTES: quality 100 whenever it fits.
+
+    Below _MIN_JPEG_QUALITY the image is shrunk 10 % at a time instead, so the result always
+    fits; only noise-like images get that far.
+    """
+    size = img.size
+    while True:
+        sized = img if size == img.size else img.resize(size, Image.LANCZOS)
+        best = _jpeg(sized, 100)
+        if len(best) > MAX_SEND_BYTES:
+            best, lo, hi = None, _MIN_JPEG_QUALITY, 99
+            while lo <= hi:             # the file grows with the quality
+                mid = (lo + hi) // 2
+                data = _jpeg(sized, mid)
+                if len(data) <= MAX_SEND_BYTES:
+                    best, lo = data, mid + 1
+                else:
+                    hi = mid - 1
+        if best is not None:
+            return best
+        size = (max(1, size[0] * 9 // 10), max(1, size[1] * 9 // 10))
+
+
+def _jpeg(img: Image.Image, quality: int) -> bytes:
+    """img as a JPEG at this quality, with full-resolution colour (no chroma subsampling)."""
+    buf = io.BytesIO()
+    try:
+        img.save(buf, format="JPEG", quality=quality, subsampling=0, optimize=True)
+    except OSError:
+        # optimize needs the whole file in one buffer, which Pillow sizes at 1-2 bytes a pixel;
+        # fine detail at a high quality takes more. Without it the file is a little larger.
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=quality, subsampling=0)
+    return buf.getvalue()
 
 
 def _to_rgb(img: Image.Image) -> Image.Image:
