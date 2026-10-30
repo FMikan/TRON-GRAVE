@@ -4,6 +4,10 @@ All notable changes to TRON-GRAVE. Versions follow the git tags.
 
 ## Unreleased
 
+## 3.7.1 — 2026-10-30
+
+Fixes for photos declined by Sonnet 5.5 and the other models that run the reasoning check, and the move to the anthropic 2.3.0 SDK.
+
 ### Fixed
 - Sonnet 5.5, Opus 5.5, Opus 5 and the Fable models get a request with no scratchpad at all: no `raw_text` transcription written before the answer and no "work in this exact order" step, which their `reasoning_extraction` classifier can decline on some photos (`odbijeno`). Sonnet 5 and the 4.x models keep both scratchpads.
 - A declined photo's log line names the refusal category Anthropic gave, e.g. `odbijeno: reasoning_extraction`; the CSV note stays `odbijeno`.
