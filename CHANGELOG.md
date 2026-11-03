@@ -4,6 +4,13 @@ All notable changes to TRON-GRAVE. Versions follow the git tags.
 
 ## Unreleased
 
+## 3.7.3 — 2026-11-03
+
+Every build now bundles the `anthropic` release this version was tested with.
+
+### Changed
+- `requirements.txt` pins `anthropic` to 2.3.0, so build.bat and CI's exe bundle it too; a build from 3.7.2's sources picks up 2.4.0, released on 2 November and not tested with TRON-GRAVE.
+
 ## 3.7.2 — 2026-11-03
 
 Photos are sent at the highest quality the API's 5 MiB per image allows.
