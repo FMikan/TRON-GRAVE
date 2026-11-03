@@ -4,6 +4,10 @@ All notable changes to TRON-GRAVE. Versions follow the git tags.
 
 ## Unreleased
 
+## 3.7.4 — 2026-11-03
+
+The app is the same as 3.7.3; CI passes again and builds the Windows exe.
+
 ### Fixed
 - CI: a GUI test no longer relies on a synthetic resize event, which GitHub's macOS runner with Python 3.13.17 stopped delivering; CI passes and builds the Windows exe again. The app itself is unchanged.
 
