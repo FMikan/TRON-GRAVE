@@ -13,6 +13,7 @@ import tkinter.font as tkfont
 import unittest
 from pathlib import Path
 from tkinter import ttk
+from types import SimpleNamespace
 from unittest import mock
 
 import grave_ui
@@ -323,10 +324,23 @@ class ScalingTests(AppCase):
         self.assertGreaterEqual(min_height, above + 4 * line)
 
     def test_the_preview_and_status_lines_wrap_instead_of_running_off(self):
-        self.app._preview_label.master.event_generate("<Configure>", width=600, height=80)
-        self.assertLessEqual(int(str(self.app._preview_label.cget("wraplength"))), 600)
-        self.app._status_label.master.event_generate("<Configure>", width=500, height=40)
-        self.assertLessEqual(int(str(self.app._status_label.cget("wraplength"))), 500)
+        # The handlers the app binds to <Configure> are called with a new width directly: on
+        # GitHub's macOS runner (Python 3.13.17) a <Configure> made with event_generate leaves
+        # wraplength unset, as if it never arrived.
+        handlers = {}
+        bind = tk.Misc.bind
+
+        def recording_bind(widget, sequence=None, func=None, add=None):
+            if sequence == "<Configure>" and func is not None:
+                handlers.setdefault(str(widget), []).append(func)
+            return bind(widget, sequence, func, add)
+
+        with mock.patch.object(tk.Misc, "bind", recording_bind):
+            app = self.app_at(1.0)
+        for label, width in ((app._preview_label, 600), (app._status_label, 500)):
+            for handler in handlers[str(label.master)]:
+                handler(SimpleNamespace(width=width))
+            self.assertLessEqual(int(str(label.cget("wraplength"))), width)
 
 
 class LogViewTests(AppCase):
