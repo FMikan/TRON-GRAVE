@@ -4,6 +4,10 @@ All notable changes to TRON-GRAVE. Versions follow the git tags.
 
 ## Unreleased
 
+## 3.7.2 — 2026-11-03
+
+Photos are sent at the highest quality the API's 5 MiB per image allows.
+
 ### Fixed
 - A photo whose EXIF orientation is 0 (an invalid "upright" some field apps write) goes out untouched instead of being re-encoded at JPEG quality 90 for a rotation that changes nothing.
 - A re-encoded photo is checked against the API's 5 MiB per image too: it always fits, shrinking a little in the rare case that not even JPEG quality 85 does (noise-like images).
