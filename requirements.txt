@@ -1,6 +1,7 @@
-# anthropic 2.x sends API version 2026-10-21 (which rejects temperature) and runs on httpx2;
-# 2.3.0 is the release this code was tested with.
-anthropic>=2.3.0,<3.0.0
+# anthropic 2.x sends API version 2026-10-21 (which rejects temperature) and runs on httpx2.
+# Pinned to 2.3.0, the release this code was tested and live-checked with, so every build
+# (build.bat, CI's exe) bundles the same SDK.
+anthropic==2.3.0
 # Imported directly to catch a stream cut off mid-answer; it also comes with anthropic.
 httpx2>=2.0
 python-dotenv>=1.0.0
